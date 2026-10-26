@@ -198,3 +198,5 @@ if image is not None:
                     draw_img = cropped_image.copy()
                     draw = ImageDraw.Draw(draw_img)
                     for (x, y, w, h) in all_cells:
+                        draw.rectangle([x, y, x+w, y+h], outline="red", width=2)
+               
