@@ -6,6 +6,7 @@ from torchvision import transforms
 from PIL import Image, ImageOps, ImageDraw
 import numpy as np
 import cv2
+import easyocr  # <-- Импортируем OCR для поиска текста
 
 # ===== 1. АРХИТЕКТУРА НЕЙРОСЕТИ =====
 class Net(nn.Module):
@@ -38,7 +39,13 @@ def load_model():
 
 model = load_model()
 
-# ===== 2. ОБРАБОТКА ОДНОЙ ЦИФРЫ =====
+# ===== 2. ЗАГРУЗКА OCR (Только один раз) =====
+@st.cache_resource
+def load_ocr():
+    # Загружаем модель для русского и английского языка (без GPU)
+    return easyocr.Reader(['ru', 'en'], gpu=False)
+
+# ===== 3. ОБРАБОТКА ОДНОЙ ЦИФРЫ =====
 def process_single_digit(cell_image):
     img = cell_image.convert('L')
     img = ImageOps.invert(img)
@@ -78,9 +85,9 @@ def process_single_digit(cell_image):
         pred = output.argmax(dim=1).item()
         return str(pred)
 
-# ===== 3. ИНТЕРФЕЙС =====
-st.set_page_config(page_title="Авто-Сканер ОГЭ", page_icon="📝")
-st.title("📝 Сканер бланков ОГЭ (Авто-обрезка)")
+# ===== 4. ИНТЕРФЕЙС =====
+st.set_page_config(page_title="Умный Сканер ОГЭ", page_icon="📝")
+st.title("📝 Сканер бланков ОГЭ (Поиск по тексту)")
 
 with st.sidebar:
     st.header("Настройки")
@@ -101,65 +108,85 @@ else:
 
 if image is not None:
     if st.button("🚀 Начать сканирование"):
-        with st.spinner('Ищем область с ответами и распознаем...'):
+        with st.spinner('Ищем текст на бланке и распознаем ответы...'):
             
-            width, height = image.size
+            reader = load_ocr()
             
-            # АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ ОБЛАСТИ (по пропорциям бланка ОГЭ)
-            # Блок с ответами (1-12 задания) находится примерно:
-            # По вертикали: от 30% до 75% высоты фото.
-            # По горизонтали: занимает левую половину (от 0% до 50% ширины).
+            # Конвертируем картинку в формат для OCR
+            img_np = np.array(image)
             
-            # Координаты для обрезки
-            x_start = int(width * 0.0)
-            x_end = int(width * 0.5)  # Левая половина
-            y_start = int(height * 0.29) # Чуть ниже заголовка "Результаты..."
-            y_end = int(height * 0.76)   # До строки "Замена ошибочных..."
+            # Ищем весь текст на картинке
+            results_ocr = reader.readtext(img_np)
             
-            # Обрезаем
-            cropped_image = image.crop((x_start, y_start, x_end, y_end))
+            # Ищем нашу фразу-якорь
+            anchor_y = None
+            for (bbox, text, prob) in results_ocr:
+                # Ищем по ключевым словам, чтобы не зависеть от идеального распознавания
+                text_lower = text.lower()
+                if "задание" in text_lower and "выполняется" in text_lower and "бланке" in text_lower:
+                    # bbox — это координаты углов найденного текста
+                    # bbox[0][1] — это верхняя Y-координата текста
+                    anchor_y = int(bbox[0][1])
+                    st.success(f"Найден ориентир: «{text}»")
+                    break
             
-            # Нарезаем на строки и клетки
-            w = x_end - x_start
-            h = y_end - y_start
-            
-            row_height = h / num_rows
-            cell_width = w / num_cells
-            
-            results = []
-            
-            for r in range(num_rows):
-                row_str = ""
-                y1 = int(r * row_height)
-                y2 = int((r + 1) * row_height)
+            if anchor_y is None:
+                st.error("Не удалось найти текст «Задание выполняется...». Попробуйте сфотографировать бланк ровнее или при лучшем свете.")
+            else:
+                width, height = image.size
                 
-                for c in range(num_cells):
-                    x1 = int(c * cell_width)
-                    x2 = int((c + 1) * cell_width)
-                    
-                    cell = cropped_image.crop((x1, y1, x2, y2))
-                    digit = process_single_digit(cell)
-                    row_str += digit
-                    
-                results.append(row_str)
-            
-            # Вывод
-            st.success("Сканирование завершено!")
-            st.write("### Результаты:")
-            
-            for i, res in enumerate(results):
-                clean_res = res.replace("_", "")
-                if clean_res:
-                    st.write(f"**Задание {i+1}:** {clean_res}")
-                else:
-                    st.write(f"**Задание {i+1}:** *нет ответа*")
-            
-            # Визуализация
-            with st.expander("Показать найденную область"):
+                # Начинаем сканировать чуть ниже найденного текста (добавляем отступ)
+                y_start = anchor_y + 40 
+                
+                # Ограничиваем область по горизонтали (левая половина бланка)
+                x_start = 0
+                x_end = int(width * 0.5)
+                
+                # Вычисляем высоту строки
+                # Предполагаем, что общая высота блока с ответами (до замены) ~ 60% экрана
+                # Но мы просто отступим вниз на нужное количество строк
+                # Высоту одной строки возьмем примерно 3.5% от высоты фото (зависит от фото)
+                row_height = int(height * 0.035) 
+                
+                # Для надежности вычислим ширину клетки
+                cell_width = (x_end - x_start) / num_cells
+                
+                results = []
                 draw_img = image.copy()
                 draw = ImageDraw.Draw(draw_img)
                 
-                # Рисуем общую рамку
-                draw.rectangle([x_start, y_start, x_end, y_end], outline="green", width=4)
+                for r in range(num_rows):
+                    y1 = y_start + r * row_height
+                    y2 = y1 + row_height
+                    
+                    # Если вышли за пределы фото — стоп
+                    if y2 > height:
+                        break
+                        
+                    # Рисуем линию для отладки
+                    draw.line([(x_start, y1), (x_end, y1)], fill="red", width=2)
+                    
+                    row_str = ""
+                    for c in range(num_cells):
+                        x1 = int(x_start + c * cell_width)
+                        x2 = int(x1 + cell_width)
+                        
+                        cell = image.crop((x1, y1, x2, y2))
+                        digit = process_single_digit(cell)
+                        row_str += digit
+                        
+                    results.append(row_str)
                 
-                st.image(draw_img, caption="Зеленая рамка — область, которую анализирует программа", use_container_width=True)
+                # Вывод
+                st.success("Сканирование завершено!")
+                st.write("### Результаты:")
+                
+                for i, res in enumerate(results):
+                    clean_res = res.replace("_", "")
+                    if clean_res:
+                        st.write(f"**Задание {i+1}:** {clean_res}")
+                    else:
+                        st.write(f"**Задание {i+1}:** *нет ответа*")
+                
+                with st.expander("Показать, как программа нашла строки"):
+                    st.image(draw_img, caption="Красные линии — где программа искала ответы", use_container_width=True)
