@@ -140,8 +140,13 @@ def find_blank_and_answers(image):
     # Сдвигаем вправо (0.08), чтобы пропустить номера заданий
     answer_x_start = bx + int(bw * 0.06)
     answer_x_end = bx + int(bw * 0.5)
-    
-    return (bx, by, bw, bh), (answer_x_start, table_top, answer_x_end, table_bottom)
+
+    # ДОБАВЛЯЕМ ОТСТУП СВЕРХУ
+    # Если хочешь опустить рамку ниже, увеличь число 20 (например, до 30 или 40)
+    top_padding = 20 
+    final_table_top = table_top + top_padding
+
+return (bx, by, bw, bh), (answer_x_start, final_table_top, answer_x_end, table_bottom)
 
 # ===== 4. ИНТЕРФЕЙС =====
 st.set_page_config(page_title="Умный Сканер ОГЭ", page_icon="📝")
