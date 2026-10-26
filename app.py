@@ -84,8 +84,8 @@ st.title("📝 Прототип сканера бланков ОГЭ (Мульт
 
 with st.sidebar:
     st.header("Настройки сканера")
-    num_rows = st.number_input("Сколько строк сканировать?", min_value=1, max_value=20, value=10)
-    num_cells = st.number_input("Сколько клеток в строке?", min_value=1, max_value=10, value=5)
+    num_rows = st.number_input("Сколько строк сканировать?", min_value=1, max_value=20, value=12)
+    num_cells = st.number_input("Сколько клеток в строке?", min_value=1, max_value=20, value=17)
 
 st.write("---")
 option = st.radio("Способ ввода:", ["📷 Сделать фото", "📁 Загрузить файл"], horizontal=True)
