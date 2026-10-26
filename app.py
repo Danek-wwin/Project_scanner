@@ -136,23 +136,25 @@ def scan_oge_blank(image):
     return results, rows
 
 # ===== 4. ИНТЕРФЕЙС =====
+# ===== 4. ИНТЕРФЕЙС =====
 st.set_page_config(page_title="Сканер ОГЭ", page_icon="📝")
 st.title("📝 Сканер бланков ОГЭ")
 
 st.write("Загрузите фото бланка, чтобы программа автоматически нашла клетки и распознала ответы.")
 st.info("⚠️ Важно: Для корректной работы сделайте ровное фото бланка при хорошем освещении (без теней).")
 
-option = st.radio("Способ ввода:", ["📷 Сделать фото", "📁 Загрузить файл"], horizontal=True)
+# Меняем порядок: сначала загрузка файла, потом камера
+option = st.radio("Способ ввода:", ["📁 Загрузить файл", "📷 Сделать фото"], horizontal=True)
 image = None
 
-if option == "📷 Сделать фото":
-    picture = st.camera_input("Сделайте снимок")
-    if picture:
-        image = Image.open(picture)
-else:
+if option == "📁 Загрузить файл":
     uploaded_file = st.file_uploader("Выберите фото бланка...", type=["jpg", "jpeg", "png"])
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
+else:
+    picture = st.camera_input("Сделайте снимок")
+    if picture:
+        image = Image.open(picture)
 
 if image is not None:
     st.write("Шаг 1: Выделите рамкой **только блок с ответами** (с 1 по 12 задание). Не захватывайте шапку бланка.")
