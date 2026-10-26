@@ -177,4 +177,4 @@ if image is not None:
                 st.balloons()
                 st.success("Отлично! Все ответы совпадают с ключом.")
             else:
-                st.error(f"Есть расхождения. Распознано: {all_answers}, Эталон: {correct_answer}")=True
+                st.error(f"Есть расхождения. Распознано: {all_answers}, Эталон: {correct_answer}")
