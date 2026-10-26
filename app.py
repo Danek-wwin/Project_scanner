@@ -136,8 +136,8 @@ def find_blank_and_answers(image):
             break
 
     # 3. Определяем левую и правую границы (таблица занимает примерно половину ширины)
-    answer_x_start = bx + int(bw * 0.03)
-    answer_x_end = bx + int(bw * 0.48)
+    answer_x_start = bx + int(bw * 0.1)
+    answer_x_end = bx + int(bw * 0.5)
     
     return (bx, by, bw, bh), (answer_x_start, table_top, answer_x_end, table_bottom)
 
