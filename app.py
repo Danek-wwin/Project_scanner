@@ -207,9 +207,9 @@ if image is not None:
                 for i, res in enumerate(results):
                     clean_res = res.replace("_", "")
                     if clean_res:
-                        st.write(f"**Задание {i+1}:** {clean_res}")
+                        st.write(f"**Задание {i+2}:** {clean_res}")
                     else:
-                        st.write(f"**Задание {i+1}:** *нет ответа*")
+                        st.write(f"**Задание {i+2}:** *нет ответа*")
                 
                 # Визуализация
                 with st.expander("Показать, как программа нашла бланк"):
