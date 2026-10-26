@@ -136,7 +136,6 @@ def scan_oge_blank(image):
     return results, rows
 
 # ===== 4. ИНТЕРФЕЙС =====
-# ===== 4. ИНТЕРФЕЙС =====
 st.set_page_config(page_title="Сканер ОГЭ", page_icon="📝")
 st.title("📝 Сканер бланков ОГЭ")
 
