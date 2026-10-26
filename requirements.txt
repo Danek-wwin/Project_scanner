@@ -5,3 +5,4 @@ Pillow
 numpy
 opencv-python-headless
 streamlit-cropper
+easyocr
