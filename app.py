@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import transforms
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageDraw
 import numpy as np
 import cv2
 from streamlit_cropper import st_cropper
@@ -41,36 +41,29 @@ model = load_model()
 
 # ===== 2. ОБРАБОТКА ОДНОЙ ЦИФРЫ =====
 def process_single_digit(cell_image):
-    """Берет картинку одной клетки, выделяет цифру и возвращает тензор для нейросети."""
     img = cell_image.convert('L')
     img = ImageOps.invert(img)
     arr = np.array(img)
     
-    # Бинаризация (Оцу)
+    # Бинаризация
     _, arr = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
-    # Убираем мелкий мусор
     kernel = np.ones((2,2), np.uint8)
     arr = cv2.morphologyEx(arr, cv2.MORPH_OPEN, kernel)
     
-    # Ищем контуры
     contours, _ = cv2.findContours(arr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # Если клетка пустая
     if not contours:
-        return None
+        return "_"
         
-    # Берем самую большую цифру в клетке (отсекаем шум)
     c = max(contours, key=cv2.contourArea)
     x, y, w, h = cv2.boundingRect(c)
     
-    # Если контур слишком мелкий (точка, ворсинка)
     if w < 5 or h < 5:
-        return None
+        return "_"
         
     digit_arr = arr[y:y+h, x:x+w]
     
-    # Вписываем в квадрат 28x28 (как в MNIST)
+    # Вписываем в квадрат 28x28
     size = max(h, w)
     pad = int(size * 0.2)
     square = np.zeros((size + 2*pad, size + 2*pad), dtype=np.uint8)
@@ -82,39 +75,87 @@ def process_single_digit(cell_image):
     tensor = transforms.ToTensor()(img_digit)
     tensor = transforms.Normalize((0.1307,), (0.3081,))(tensor)
     
-    return tensor
+    with torch.no_grad():
+        t = tensor.unsqueeze(0)
+        output = model(t)
+        pred = output.argmax(dim=1).item()
+        return str(pred)
 
-# ===== 3. ИНТЕРФЕЙС =====
-st.set_page_config(page_title="Сканер бланков ОГЭ", page_icon="📝")
+# ===== 3. УМНЫЙ ПОИСК КЛЕТОК (Игнорирует разные пробелы) =====
+def find_cells_smart(image):
+    """Находит квадратные клетки на бланке и группирует их в строки."""
+    img = image.convert('L')
+    img = ImageOps.invert(img)
+    arr = np.array(img)
+    
+    # Делаем линии более четкими для поиска
+    _, arr = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Ищем контуры
+    contours, _ = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    
+    cells = []
+    # Фильтруем контуры: нам нужны только квадраты (клетки)
+    for c in contours:
+        x, y, w, h = cv2.boundingRect(c)
+        aspect_ratio = w / float(h)
+        area = w * h
+        
+        # Клетка должна быть квадратной и достаточно большой
+        if 0.7 < aspect_ratio < 1.3 and area > 300: 
+            cells.append((x, y, w, h))
+            
+    if not cells:
+        return [], []
 
-st.title("📝 Прототип сканера бланков ОГЭ")
+    # Сортируем по Y (сверху вниз)
+    cells.sort(key=lambda b: b[1])
+    
+    # Группируем в строки
+    rows = []
+    current_row = [cells[0]]
+    
+    for cell in cells[1:]:
+        # Если центр клетки по Y близок к центру предыдущей, это одна строка
+        prev_center_y = current_row[-1][1] + current_row[-1][3] / 2
+        curr_center_y = cell[1] + cell[3] / 2
+        
+        if abs(curr_center_y - prev_center_y) < (cell[3] * 0.6): # Порог расстояния
+            current_row.append(cell)
+        else:
+            # Сортируем клетки в строке по X (слева направо)
+            current_row.sort(key=lambda b: b[0])
+            rows.append(current_row)
+            current_row = [cell]
+            
+    if current_row:
+        current_row.sort(key=lambda b: b[0])
+        rows.append(current_row)
+        
+    return rows, cells
 
-with st.sidebar:
-    st.header("Настройки проверки")
-    st.write("Введите правильные ответы (ключ):")
-    correct_answer = st.text_input("Эталонный ответ:", value="54029")
-    num_rows = st.number_input("Сколько строк сканировать?", min_value=1, max_value=20, value=10)
-    num_cells = st.number_input("Сколько клеток в строке?", min_value=1, max_value=25, value=17)
+# ===== 4. ИНТЕРФЕЙС =====
+st.set_page_config(page_title="Сканер ОГЭ", page_icon="📝")
+st.title("📝 Прототип сканера бланков ОГЭ (Умный поиск)")
 
-# Выбор фото
-st.write("---")
-option = st.radio("Способ ввода:", ["📷 Сделать фото", "📁 Загрузить файл"], horizontal=True)
+st.write("Загрузите фото бланка. Программа сама найдет клетки и правильно сгруппирует их по строкам.")
+st.info("⚠️ Фотографируйте бланк ровно, чтобы клетки были квадратными. Выделяйте только область с ответами.")
+
+option = st.radio("Способ ввода:", ["📁 Загрузить файл", "📷 Сделать фото"], horizontal=True)
 image = None
 
-if option == "📷 Сделать фото":
-    picture = st.camera_input("Сделайте снимок")
-    if picture:
-        image = Image.open(picture)
-else:
+if option == "📁 Загрузить файл":
     uploaded_file = st.file_uploader("Выберите фото бланка...", type=["jpg", "jpeg", "png"])
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
+else:
+    picture = st.camera_input("Сделайте снимок")
+    if picture:
+        image = Image.open(picture)
 
-# Логика работы
 if image is not None:
-    st.info(f"Шаг 1: Выделите рамкой область с ответами (все {num_rows} строк).")
+    st.write("Шаг 1: Выделите рамкой область с ответами (желательно только сами клетки).")
     
-    # Интерактивная обрезка
     cropped_image = st_cropper(
         image, 
         realtime_update=True, 
@@ -122,59 +163,37 @@ if image is not None:
         aspect_ratio=None
     )
     
-    st.write("Шаг 2: Проверьте выделенную область:")
-    st.image(cropped_image, use_container_width=True)
-    
-    with st.spinner('Распознаем ответы...'):
-        width, height = cropped_image.size
-        
-        # Делим высоту на количество строк, а ширину на количество клеток
-        row_height = height / num_rows
-        cell_width = width / num_cells
-        
-        results = []
-        
-        # Проходим по каждой строке
-        for r in range(num_rows):
-            row_str = ""
-            y_start = int(r * row_height)
-            y_end = int((r + 1) * row_height)
+    if st.button("🚀 Начать сканирование"):
+        with st.spinner('Ищем клетки и распознаем...'):
+            # Используем новую умную функцию
+            rows, all_cells = find_cells_smart(cropped_image)
             
-            # Проходим по каждой клетке в строке
-            for c in range(num_cells):
-                x_start = int(c * cell_width)
-                x_end = int((c + 1) * cell_width)
-                
-                cell = cropped_image.crop((x_start, y_start, x_end, y_end))
-                tensor = process_single_digit(cell)
-                
-                if tensor is not None:
-                    with torch.no_grad():
-                        t = tensor.unsqueeze(0)
-                        output = model(t)
-                        pred = output.argmax(dim=1).item()
-                        row_str += str(pred)
-                else:
-                    row_str += "_" # Если клетка пустая
-            
-            results.append(row_str)
-        
-        # Вывод результатов
-        st.divider()
-        st.success("### Результаты сканирования:")
-        
-        for i, res in enumerate(results):
-            clean_res = res.replace("_", "")
-            if clean_res == "":
-                st.write(f"**Строка {i+1}:** *пусто*")
+            if not rows:
+                st.error("Клетки не найдены. Попробуйте выделить область ровнее или сфотографировать бланк без теней.")
             else:
-                st.write(f"**Строка {i+1}:** {clean_res}")
+                st.success(f"Найдено строк: {len(rows)}")
                 
-        # Сверка с эталоном (если нужно)
-        if st.button("✅ Сверить с эталоном"):
-            all_answers = "".join([r.replace("_", "") for r in results])
-            if all_answers == correct_answer:
-                st.balloons()
-                st.success("Отлично! Все ответы совпадают с ключом.")
-            else:
-                st.error(f"Есть расхождения. Распознано: {all_answers}, Эталон: {correct_answer}")
+                results = []
+                for row in rows:
+                    row_str = ""
+                    # Берем только первые 17 клеток в строке (если найдет больше)
+                    for i in range(min(17, len(row))):
+                        x, y, w, h = row[i]
+                        cell_img = cropped_image.crop((x, y, x+w, y+h))
+                        digit = process_single_digit(cell_img)
+                        row_str += digit
+                    results.append(row_str)
+                
+                # Вывод
+                st.write("### Результаты по заданиям:")
+                for i, res in enumerate(results):
+                    clean_res = res.replace("_", "")
+                    st.write(f"**Строка {i+1}:** {clean_res}")
+                    
+                # Отладка
+                with st.expander("Показать, как программа нашла клетки"):
+                    draw_img = cropped_image.copy()
+                    draw = ImageDraw.Draw(draw_img)
+                    for (x, y, w, h) in all_cells:
+                        draw.rectangle([x, y, x+w, y+h], outline="red", width=2)
+                    st.image(draw_img, caption="Найденные клетки", use_container_width=True)
