@@ -78,9 +78,9 @@ def process_single_digit(cell_image):
         pred = output.argmax(dim=1).item()
         return str(pred)
 
-# ===== 3. АВТОПОИСК БЛОКА ОТВЕТОВ =====
-def find_answer_grid(image):
-    """Находит координаты (x, y, w, h) самой большой группы клеток на фото."""
+# ===== 3. ПОИСК ТАБЛИЦЫ ПО ЛИНИЯМ =====
+def find_table_by_lines(image):
+    """Ищет таблицу с ответами по длинным горизонтальным линиям."""
     img = image.convert('L')
     img = ImageOps.invert(img)
     arr = np.array(img)
@@ -88,40 +88,43 @@ def find_answer_grid(image):
     # Бинаризация
     _, arr = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     
-    # Ищем контуры
-    contours, _ = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # Ищем горизонтальные линии
+    # Используем морфологию: оставляем только длинные горизонтальные объекты
+    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+    detected_lines = cv2.morphologyEx(arr, cv2.MORPH_OPEN, horizontal_kernel, iterations=2)
     
-    # Собираем все квадратные объекты (клетки)
-    squares = []
+    # Находим контуры этих линий
+    contours, _ = cv2.findContours(detected_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    lines = []
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
-        aspect_ratio = w / float(h)
-        area = w * h
-        if 0.8 < aspect_ratio < 1.2 and area > 100: # Фильтр квадратов
-            squares.append((x, y, w, h))
+        # Оставляем только длинные линии (ширина больше 50% картинки)
+        if w > image.width * 0.5:
+            lines.append((x, y, w, h))
             
-    if not squares:
+    if len(lines) < 2:
         return None
         
-    # Находим самый большой кластер клеток (по площади)
-    # Просто берем минимальные и максимальные координаты всех найденных квадратов
-    x_coords = [s[0] for s in squares]
-    y_coords = [s[1] for s in squares]
-    x_ends = [s[0] + s[2] for s in squares]
-    y_ends = [s[1] + s[3] for s in squares]
+    # Сортируем линии по Y (сверху вниз)
+    lines.sort(key=lambda b: b[1])
     
-    min_x, max_x = min(x_coords), max(x_ends)
-    min_y, max_y = min(y_coords), max(y_ends)
+    # Берем самую верхнюю длинную линию (заголовок "Результаты...") 
+    # и самую нижнюю длинную линию перед "Заменой ответов"
+    # Но чтобы не гадать, просто возьмем 2-ю и 3-ю линии сверху (они ограничивают таблицу)
+    # Для надежности берем от первой линии до последней в верхней половине фото
+    top_y = lines[1][1] # Пропускаем самую верхнюю рамку бланка
+    bottom_y = lines[-1][1] # Берем последнюю длинную линию
     
-    # Немного отступаем, чтобы захватить края
-    pad = 10
-    return (max(0, min_x - pad), max(0, min_y - pad), 
-            min(image.width, max_x + pad) - max(0, min_x - pad), 
-            min(image.height, max_y + pad) - max(0, min_y - pad))
+    # Находим левую и правую границы по линиям
+    min_x = min([l[0] for l in lines])
+    max_x = max([l[0] + l[2] for l in lines])
+    
+    return (min_x, top_y, max_x - min_x, bottom_y - top_y)
 
 # ===== 4. ИНТЕРФЕЙС =====
-st.set_page_config(page_title="Авто-Сканер ОГЭ", page_icon="📝")
-st.title("📝 Сканер бланков ОГЭ (Авто-поиск)")
+st.set_page_config(page_title="Авто-Сканер ОГЭ (Линии)", page_icon="📝")
+st.title("📝 Сканер бланков ОГЭ (Поиск по линиям)")
 
 with st.sidebar:
     st.header("Настройки")
@@ -142,20 +145,25 @@ else:
 
 if image is not None:
     if st.button("🚀 Начать сканирование"):
-        with st.spinner('Ищем область с ответами и распознаем...'):
+        with st.spinner('Ищем таблицу и распознаем...'):
             
-            # 1. Автоматически находим область с ответами
-            grid_box = find_answer_grid(image)
+            # 1. Автоматически находим область таблицы
+            box = find_table_by_lines(image)
             
-            if not grid_box:
-                st.error("Не удалось найти клетки на фото. Сфотографируйте бланк ближе и при хорошем свете.")
+            if not box:
+                st.error("Не удалось найти линии таблицы. Попробуйте сфотографировать ровнее.")
             else:
-                x, y, w, h = grid_box
+                x, y, w, h = box
                 
-                # 2. Вырезаем найденную область
+                # Ограничиваем рамки, чтобы не вылезти за пределы фото
+                x = max(0, x)
+                y = max(0, y)
+                w = min(image.width - x, w)
+                h = min(image.height - y, h)
+                
                 cropped_image = image.crop((x, y, x+w, y+h))
                 
-                # 3. Нарезаем на строки и клетки
+                # 2. Нарезаем на строки и клетки
                 row_height = h / num_rows
                 cell_width = w / num_cells
                 
@@ -190,10 +198,10 @@ if image is not None:
                     draw_img = image.copy()
                     draw = ImageDraw.Draw(draw_img)
                     
-                    # Рисуем общую рамку бланка
+                    # Рисуем общую рамку
                     draw.rectangle([x, y, x+w, y+h], outline="green", width=3)
                     
-                    # Рисуем сетку внутри
+                    # Рисуем сетку
                     for r in range(num_rows + 1):
                         line_y = y + int(r * row_height)
                         draw.line([(x, line_y), (x+w, line_y)], fill="red", width=1)
@@ -202,4 +210,4 @@ if image is not None:
                         line_x = x + int(c * cell_width)
                         draw.line([(line_x, y), (line_x, y+h)], fill="blue", width=1)
                         
-                    st.image(draw_img, caption="Зеленая рамка — область, которую нашла программа", use_container_width=True)
+                    st.image(draw_img, caption="Зеленая рамка — найденная таблица", use_container_width=True)
