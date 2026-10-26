@@ -6,7 +6,7 @@ from torchvision import transforms
 from PIL import Image, ImageOps, ImageDraw
 import numpy as np
 import cv2
-import easyocr  # <-- Импортируем OCR для поиска текста
+from streamlit_cropper import st_cropper
 
 # ===== 1. АРХИТЕКТУРА НЕЙРОСЕТИ =====
 class Net(nn.Module):
@@ -39,13 +39,7 @@ def load_model():
 
 model = load_model()
 
-# ===== 2. ЗАГРУЗКА OCR (Только один раз) =====
-@st.cache_resource
-def load_ocr():
-    # Загружаем модель для русского и английского языка (без GPU)
-    return easyocr.Reader(['ru', 'en'], gpu=False)
-
-# ===== 3. ОБРАБОТКА ОДНОЙ ЦИФРЫ =====
+# ===== 2. ОБРАБОТКА ОДНОЙ ЦИФРЫ =====
 def process_single_digit(cell_image):
     img = cell_image.convert('L')
     img = ImageOps.invert(img)
@@ -85,13 +79,13 @@ def process_single_digit(cell_image):
         pred = output.argmax(dim=1).item()
         return str(pred)
 
-# ===== 4. ИНТЕРФЕЙС =====
-st.set_page_config(page_title="Умный Сканер ОГЭ", page_icon="📝")
-st.title("📝 Сканер бланков ОГЭ (Поиск по тексту)")
+# ===== 3. ИНТЕРФЕЙС =====
+st.set_page_config(page_title="Сканер ОГЭ", page_icon="📝")
+st.title("📝 Сканер бланков ОГЭ (Поиск по линиям)")
 
 with st.sidebar:
     st.header("Настройки")
-    num_rows = st.number_input("Сколько строк сканировать?", min_value=1, max_value=20, value=11)
+    num_rows = st.number_input("Сколько всего строк сканировать?", min_value=1, max_value=20, value=12)
     num_cells = st.number_input("Сколько клеток в строке?", min_value=1, max_value=25, value=17)
 
 option = st.radio("Способ ввода:", ["📁 Загрузить файл", "📷 Сделать фото"], horizontal=True)
@@ -107,86 +101,46 @@ else:
         image = Image.open(picture)
 
 if image is not None:
+    st.warning("⚠️ Выделите рамкой **ВЕСЬ блок с ответами** (с 1 по 12 задание).")
+    
+    cropped_image = st_cropper(
+        image, 
+        realtime_update=True, 
+        box_color='#FF0000', 
+        aspect_ratio=None
+    )
+    
     if st.button("🚀 Начать сканирование"):
-        with st.spinner('Ищем текст на бланке и распознаем ответы...'):
+        with st.spinner('Сканируем бланк...'):
+            # Просто делим выделенную область на равные строки и клетки
+            width, height = cropped_image.size
             
-            reader = load_ocr()
+            row_height = height / num_rows
+            cell_width = width / num_cells
             
-            # Конвертируем картинку в формат для OCR
-            img_np = np.array(image)
+            results = []
             
-            # Ищем весь текст на картинке
-            results_ocr = reader.readtext(img_np)
-            
-            # Ищем нашу фразу-якорь
-            anchor_y = None
-            for (bbox, text, prob) in results_ocr:
-                # Ищем по ключевым словам, чтобы не зависеть от идеального распознавания
-                text_lower = text.lower()
-                if "задание" in text_lower and "выполняется" in text_lower and "бланке" in text_lower:
-                    # bbox — это координаты углов найденного текста
-                    # bbox[0][1] — это верхняя Y-координата текста
-                    anchor_y = int(bbox[0][1])
-                    st.success(f"Найден ориентир: «{text}»")
-                    break
-            
-            if anchor_y is None:
-                st.error("Не удалось найти текст «Задание выполняется...». Попробуйте сфотографировать бланк ровнее или при лучшем свете.")
-            else:
-                width, height = image.size
+            for r in range(num_rows):
+                row_str = ""
+                y_start = int(r * row_height)
+                y_end = int((r + 1) * row_height)
                 
-                # Начинаем сканировать чуть ниже найденного текста (добавляем отступ)
-                y_start = anchor_y + 40 
-                
-                # Ограничиваем область по горизонтали (левая половина бланка)
-                x_start = 0
-                x_end = int(width * 0.5)
-                
-                # Вычисляем высоту строки
-                # Предполагаем, что общая высота блока с ответами (до замены) ~ 60% экрана
-                # Но мы просто отступим вниз на нужное количество строк
-                # Высоту одной строки возьмем примерно 3.5% от высоты фото (зависит от фото)
-                row_height = int(height * 0.035) 
-                
-                # Для надежности вычислим ширину клетки
-                cell_width = (x_end - x_start) / num_cells
-                
-                results = []
-                draw_img = image.copy()
-                draw = ImageDraw.Draw(draw_img)
-                
-                for r in range(num_rows):
-                    y1 = y_start + r * row_height
-                    y2 = y1 + row_height
+                for c in range(num_cells):
+                    x_start = int(c * cell_width)
+                    x_end = int((c + 1) * cell_width)
                     
-                    # Если вышли за пределы фото — стоп
-                    if y2 > height:
-                        break
-                        
-                    # Рисуем линию для отладки
-                    draw.line([(x_start, y1), (x_end, y1)], fill="red", width=2)
-                    
-                    row_str = ""
-                    for c in range(num_cells):
-                        x1 = int(x_start + c * cell_width)
-                        x2 = int(x1 + cell_width)
-                        
-                        cell = image.crop((x1, y1, x2, y2))
-                        digit = process_single_digit(cell)
-                        row_str += digit
-                        
-                    results.append(row_str)
+                    cell = cropped_image.crop((x_start, y_start, x_end, y_end))
+                    digit = process_single_digit(cell)
+                    row_str += digit
                 
-                # Вывод
-                st.success("Сканирование завершено!")
-                st.write("### Результаты:")
-                
-                for i, res in enumerate(results):
-                    clean_res = res.replace("_", "")
-                    if clean_res:
-                        st.write(f"**Задание {i+1}:** {clean_res}")
-                    else:
-                        st.write(f"**Задание {i+1}:** *нет ответа*")
-                
-                with st.expander("Показать, как программа нашла строки"):
-                    st.image(draw_img, caption="Красные линии — где программа искала ответы", use_container_width=True)
+                results.append(row_str)
+            
+            st.success("Сканирование завершено!")
+            st.write("### Результаты:")
+            
+            for i, res in enumerate(results):
+                clean_res = res.replace("_", "")
+                if clean_res:
+                    st.write(f"**Задание {i+1}:** {clean_res}")
+                else:
+                    st.write(f"**Задание {i+1}:** *нет ответа*")
