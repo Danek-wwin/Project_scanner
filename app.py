@@ -83,47 +83,50 @@ def process_single_digit(cell_image):
 
 # ===== 3. УМНЫЙ ПОИСК КЛЕТОК (Игнорирует разные пробелы) =====
 def find_cells_smart(image):
-    """Находит квадратные клетки на бланке и группирует их в строки."""
+    """Находит квадратные клетки, склеивая пунктирные линии."""
     img = image.convert('L')
     img = ImageOps.invert(img)
     arr = np.array(img)
     
-    # Делаем линии более четкими для поиска
+    # 1. Бинаризация
     _, arr = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     
-    # Ищем контуры
-    contours, _ = cv2.findContours(arr, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # 2. СКЛЕИВАЕМ ПУНКТИР (Morphological Closing)
+    # Берем ядро 3x3 (или 5x5, если пунктир совсем редкий) и "закрываем" промежутки
+    kernel = np.ones((3, 3), np.uint8)
+    arr_closed = cv2.morphologyEx(arr, cv2.MORPH_CLOSE, kernel, iterations=2)
+    
+    # 3. Ищем контуры на уже склеенной картинке
+    contours, _ = cv2.findContours(arr_closed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     
     cells = []
-    # Фильтруем контуры: нам нужны только квадраты (клетки)
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
         aspect_ratio = w / float(h)
         area = w * h
         
-        # Клетка должна быть квадратной и достаточно большой
-        if 0.7 < aspect_ratio < 1.3 and area > 300: 
+        # Клетки должны быть квадратными (от 0.8 до 1.2) и достаточно большими
+        if 0.8 < aspect_ratio < 1.2 and area > 500: 
             cells.append((x, y, w, h))
             
     if not cells:
         return [], []
 
-    # Сортируем по Y (сверху вниз)
+    # 4. Сортируем по Y (сверху вниз)
     cells.sort(key=lambda b: b[1])
     
-    # Группируем в строки
+    # 5. Группируем в строки
     rows = []
     current_row = [cells[0]]
     
     for cell in cells[1:]:
-        # Если центр клетки по Y близок к центру предыдущей, это одна строка
         prev_center_y = current_row[-1][1] + current_row[-1][3] / 2
         curr_center_y = cell[1] + cell[3] / 2
         
-        if abs(curr_center_y - prev_center_y) < (cell[3] * 0.6): # Порог расстояния
+        # Если центры клеток по высоте почти совпадают — это одна строка
+        if abs(curr_center_y - prev_center_y) < (cell[3] * 0.8): 
             current_row.append(cell)
         else:
-            # Сортируем клетки в строке по X (слева направо)
             current_row.sort(key=lambda b: b[0])
             rows.append(current_row)
             current_row = [cell]
