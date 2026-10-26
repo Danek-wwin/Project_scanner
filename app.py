@@ -45,7 +45,6 @@ def process_single_digit(cell_image):
     img = ImageOps.invert(img)
     arr = np.array(img)
     
-    # Бинаризация
     _, arr = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     kernel = np.ones((2,2), np.uint8)
     arr = cv2.morphologyEx(arr, cv2.MORPH_OPEN, kernel)
@@ -63,7 +62,6 @@ def process_single_digit(cell_image):
         
     digit_arr = arr[y:y+h, x:x+w]
     
-    # Вписываем в квадрат 28x28
     size = max(h, w)
     pad = int(size * 0.2)
     square = np.zeros((size + 2*pad, size + 2*pad), dtype=np.uint8)
@@ -81,69 +79,16 @@ def process_single_digit(cell_image):
         pred = output.argmax(dim=1).item()
         return str(pred)
 
-# ===== 3. УМНЫЙ ПОИСК КЛЕТОК (Игнорирует разные пробелы) =====
-def find_cells_smart(image):
-    """Находит квадратные клетки, склеивая пунктирные линии."""
-    img = image.convert('L')
-    img = ImageOps.invert(img)
-    arr = np.array(img)
-    
-    # 1. Бинаризация
-    _, arr = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    
-    # 2. СКЛЕИВАЕМ ПУНКТИР (Morphological Closing)
-    # Берем ядро 3x3 (или 5x5, если пунктир совсем редкий) и "закрываем" промежутки
-    kernel = np.ones((3, 3), np.uint8)
-    arr_closed = cv2.morphologyEx(arr, cv2.MORPH_CLOSE, kernel, iterations=2)
-    
-    # 3. Ищем контуры на уже склеенной картинке
-    contours, _ = cv2.findContours(arr_closed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    
-    cells = []
-    for c in contours:
-        x, y, w, h = cv2.boundingRect(c)
-        aspect_ratio = w / float(h)
-        area = w * h
-        
-        # Клетки должны быть квадратными (от 0.8 до 1.2) и достаточно большими
-        if 0.8 < aspect_ratio < 1.2 and area > 500: 
-            cells.append((x, y, w, h))
-            
-    if not cells:
-        return [], []
-
-    # 4. Сортируем по Y (сверху вниз)
-    cells.sort(key=lambda b: b[1])
-    
-    # 5. Группируем в строки
-    rows = []
-    current_row = [cells[0]]
-    
-    for cell in cells[1:]:
-        prev_center_y = current_row[-1][1] + current_row[-1][3] / 2
-        curr_center_y = cell[1] + cell[3] / 2
-        
-        # Если центры клеток по высоте почти совпадают — это одна строка
-        if abs(curr_center_y - prev_center_y) < (cell[3] * 0.8): 
-            current_row.append(cell)
-        else:
-            current_row.sort(key=lambda b: b[0])
-            rows.append(current_row)
-            current_row = [cell]
-            
-    if current_row:
-        current_row.sort(key=lambda b: b[0])
-        rows.append(current_row)
-        
-    return rows, cells
-
-# ===== 4. ИНТЕРФЕЙС =====
+# ===== 3. ИНТЕРФЕЙС =====
 st.set_page_config(page_title="Сканер ОГЭ", page_icon="📝")
-st.title("📝 Прототип сканера бланков ОГЭ (Умный поиск)")
+st.title("📝 Прототип сканера бланков ОГЭ")
 
-st.write("Загрузите фото бланка. Программа сама найдет клетки и правильно сгруппирует их по строкам.")
-st.info("⚠️ Фотографируйте бланк ровно, чтобы клетки были квадратными. Выделяйте только область с ответами.")
+with st.sidebar:
+    st.header("Настройки")
+    num_rows = st.number_input("Сколько всего строк сканировать?", min_value=1, max_value=20, value=12)
+    num_cells = st.number_input("Сколько клеток в строке?", min_value=1, max_value=25, value=17)
 
+st.write("Загрузите фото бланка.")
 option = st.radio("Способ ввода:", ["📁 Загрузить файл", "📷 Сделать фото"], horizontal=True)
 image = None
 
@@ -157,7 +102,7 @@ else:
         image = Image.open(picture)
 
 if image is not None:
-    st.write("Шаг 1: Выделите рамкой область с ответами (желательно только сами клетки).")
+    st.warning("⚠️ Шаг 1: Выделите рамкой **РОВНО ОДНУ строку** (первую, где написано 1 2 3). Рамка должна быть впритык к клеткам.")
     
     cropped_image = st_cropper(
         image, 
@@ -167,36 +112,110 @@ if image is not None:
     )
     
     if st.button("🚀 Начать сканирование"):
-        with st.spinner('Ищем клетки и распознаем...'):
-            # Используем новую умную функцию
-            rows, all_cells = find_cells_smart(cropped_image)
+        with st.spinner('Сканируем бланк...'):
+            # Размеры выделенной строки-трафарета
+            template_width, template_height = cropped_image.size
+            cell_width = template_width / num_cells
             
-            if not rows:
-                st.error("Клетки не найдены. Попробуйте выделить область ровнее или сфотографировать бланк без теней.")
+            # ВАЖНО: Чтобы найти координаты выделенной строки на оригинальном фото,
+            # мы найдем её местоположение. Но так как Streamlit Cropper возвращает только обрезанное фото,
+            # мы применим хитрость: мы будем использовать само обрезанное фото, но "шагать" вниз по оригиналу.
+            
+            # Находим, где именно находится выделенная строка на оригинале
+            # Для простоты мы попросим пользователя выделить строку, а программа 
+            # возьмет Y-координату этой строки и будет прибавлять высоту строки.
+            
+            # (В реальном коде мы бы искали шаблон, но для Streamlit мы используем другой подход)
+            
+            # Давай сделаем проще: попросим выделить ВСЮ область, но скажем, 
+            # что программа использует высоту первой строки как шаг.
+            
+            # НЕТ, лучший вариант для тебя: 
+            # Выделяем ВСЮ область, а программа делит её пропорционально.
+            # Но если пробелы разные, это не сработает.
+            
+            # Поэтому, самый надежный вариант для школьного проекта:
+            # Использовать "Умный поиск" (который мы делали ранее), 
+            # но с улучшенным склеиванием (MORPH_CLOSE с большим ядром).
+            
+            # Давай вернемся к Умному поиску, но сделаем его агрессивнее.
+            # (Код ниже - это тот самый умный поиск с улучшениями)
+            
+            # Переопределим функцию прямо здесь для надежности
+            img = image.convert('L')
+            img = ImageOps.invert(img)
+            arr = np.array(img)
+            
+            # Агрессивная бинаризация
+            _, arr = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # УВЕЛИЧИВАЕМ ЯДРО ДЛЯ СКЛЕЙКИ ПУНКТИРА (5x5 и 3 итерации)
+            kernel = np.ones((5, 5), np.uint8)
+            arr_closed = cv2.morphologyEx(arr, cv2.MORPH_CLOSE, kernel, iterations=3)
+            
+            # Еще одна морфологическая операция, чтобы убрать шум и оставить только сетку
+            kernel_open = np.ones((3, 3), np.uint8)
+            arr_closed = cv2.morphologyEx(arr_closed, cv2.MORPH_OPEN, kernel_open, iterations=1)
+            
+            contours, _ = cv2.findContours(arr_closed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            
+            cells = []
+            for c in contours:
+                x, y, w, h = cv2.boundingRect(c)
+                aspect_ratio = w / float(h)
+                area = w * h
+                
+                # Более мягкий фильтр для клеток (чтобы не пропустить бледные)
+                if 0.6 < aspect_ratio < 1.4 and area > 200: 
+                    cells.append((x, y, w, h))
+                    
+            if not cells:
+                st.error("Не удалось найти клетки. Попробуйте сделать фото ровнее или выделить область с лучшим контрастом.")
             else:
+                # Сортируем по Y
+                cells.sort(key=lambda b: b[1])
+                
+                # Группируем в строки
+                rows = []
+                current_row = [cells[0]]
+                
+                for cell in cells[1:]:
+                    prev_center_y = current_row[-1][1] + current_row[-1][3] / 2
+                    curr_center_y = cell[1] + cell[3] / 2
+                    
+                    # Увеличили порог, чтобы разные строки не слипались
+                    if abs(curr_center_y - prev_center_y) < (cell[3] * 1.0): 
+                        current_row.append(cell)
+                    else:
+                        current_row.sort(key=lambda b: b[0])
+                        rows.append(current_row)
+                        current_row = [cell]
+                        
+                if current_row:
+                    current_row.sort(key=lambda b: b[0])
+                    rows.append(current_row)
+                
                 st.success(f"Найдено строк: {len(rows)}")
                 
                 results = []
                 for row in rows:
                     row_str = ""
-                    # Берем только первые 17 клеток в строке (если найдет больше)
-                    for i in range(min(17, len(row))):
+                    for i in range(min(num_cells, len(row))):
                         x, y, w, h = row[i]
-                        cell_img = cropped_image.crop((x, y, x+w, y+h))
+                        cell_img = image.crop((x, y, x+w, y+h))
                         digit = process_single_digit(cell_img)
                         row_str += digit
                     results.append(row_str)
-                
-                # Вывод
-                st.write("### Результаты по заданиям:")
+                    
+                st.write("### Результаты:")
                 for i, res in enumerate(results):
                     clean_res = res.replace("_", "")
-                    st.write(f"**Строка {i+1}:** {clean_res}")
-                    
-                # Отладка
-                with st.expander("Показать, как программа нашла клетки"):
-                    draw_img = cropped_image.copy()
+                    if clean_res:
+                        st.write(f"**Строка {i+1}:** {clean_res}")
+                        
+                with st.expander("Показать найденные клетки"):
+                    draw_img = image.copy()
                     draw = ImageDraw.Draw(draw_img)
-                    for (x, y, w, h) in all_cells:
+                    for (x, y, w, h) in cells:
                         draw.rectangle([x, y, x+w, y+h], outline="red", width=2)
-                    st.image(draw_img, caption="Найденные клетки", use_container_width=True)
+                    st.image(draw_img, use_container_width=True)
