@@ -91,7 +91,7 @@ st.title("📝 Сканер бланков ОГЭ (Поиск по тексту)
 
 with st.sidebar:
     st.header("Настройки")
-    num_rows = st.number_input("Сколько строк сканировать?", min_value=1, max_value=20, value=12)
+    num_rows = st.number_input("Сколько строк сканировать?", min_value=1, max_value=20, value=11)
     num_cells = st.number_input("Сколько клеток в строке?", min_value=1, max_value=25, value=17)
 
 option = st.radio("Способ ввода:", ["📁 Загрузить файл", "📷 Сделать фото"], horizontal=True)
