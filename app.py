@@ -41,7 +41,6 @@ model = load_model()
 
 # ===== 2. ФУНКЦИЯ ОБРАБОТКИ ОДНОЙ ЦИФРЫ =====
 def process_single_digit(cell_image):
-    """Берет картинку одной клетки, выделяет цифру и возвращает тензор для нейросети."""
     img = cell_image.convert('L')
     img = ImageOps.invert(img)
     arr = np.array(img)
@@ -53,24 +52,19 @@ def process_single_digit(cell_image):
     kernel = np.ones((2,2), np.uint8)
     arr = cv2.morphologyEx(arr, cv2.MORPH_OPEN, kernel)
     
-    # Ищем контуры
     contours, _ = cv2.findContours(arr, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # Если клетка пустая
     if not contours:
         return None
         
-    # Берем самую большую цифру в клетке (отсекаем шум)
     c = max(contours, key=cv2.contourArea)
     x, y, w, h = cv2.boundingRect(c)
     
-    # Если контур слишком мелкий (точка, ворсинка)
     if w < 5 or h < 5:
         return None
         
     digit_arr = arr[y:y+h, x:x+w]
     
-    # Вписываем в квадрат 28x28 (как в MNIST)
     size = max(h, w)
     pad = int(size * 0.2)
     square = np.zeros((size + 2*pad, size + 2*pad), dtype=np.uint8)
@@ -86,18 +80,13 @@ def process_single_digit(cell_image):
 
 # ===== 3. ИНТЕРФЕЙС =====
 st.set_page_config(page_title="Сканер бланков ОГЭ", page_icon="📝")
+st.title("📝 Прототип сканера бланков ОГЭ (Мультистрок)")
 
-st.title("📝 Прототип сканера бланков ОГЭ")
-st.write("Программа для автоматического распознавания ответов и сверки их с эталоном.")
-
-# Блок настроек эталона (имитация базы данных)
 with st.sidebar:
-    st.header("Настройки проверки")
-    st.write("Введите правильные ответы (ключ):")
-    correct_answer = st.text_input("Эталонный ответ:", value="54029")
+    st.header("Настройки сканера")
+    num_rows = st.number_input("Сколько строк сканировать?", min_value=1, max_value=20, value=10)
     num_cells = st.number_input("Сколько клеток в строке?", min_value=1, max_value=10, value=5)
 
-# Выбор фото
 st.write("---")
 option = st.radio("Способ ввода:", ["📷 Сделать фото", "📁 Загрузить файл"], horizontal=True)
 image = None
@@ -111,11 +100,10 @@ else:
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
 
-# Логика работы
 if image is not None:
-    st.info("Шаг 1: Выделите рамкой ОДНУ строку с ответами (например, задания 1-5).")
+    st.info(f"Выделите рамкой **всю область ответов** (все {num_rows} строк).")
     
-    # Интерактивная обрезка
+    # Обрезка всего блока ответов
     cropped_image = st_cropper(
         image, 
         realtime_update=True, 
@@ -123,58 +111,45 @@ if image is not None:
         aspect_ratio=None
     )
     
-    st.write("Шаг 2: Проверьте выделенную область:")
-    st.image(cropped_image, use_container_width=True)
+    st.image(cropped_image, caption='Выделенный блок ответов', use_container_width=True)
     
-    with st.spinner('Распознаем ответы...'):
-        width, height = cropped_image.size
-        cell_width = width / num_cells
-        
-        predicted_number = ""
-        boxes_to_draw = []
-        
-        # Проходим по каждой клетке
-        for i in range(num_cells):
-            x_start = int(i * cell_width)
-            x_end = int((i + 1) * cell_width)
+    if st.button("🚀 Запустить сканирование"):
+        with st.spinner('Сканируем бланк...'):
+            width, height = cropped_image.size
             
-            # Вырезаем клетку
-            cell = cropped_image.crop((x_start, 0, x_end, height))
+            # Вычисляем высоту одной строки
+            row_height = height / num_rows
+            # Ширина одной клетки
+            cell_width = width / num_cells
             
-            # Обрабатываем
-            tensor = process_single_digit(cell)
+            results = []
             
-            if tensor is not None:
-                # Предсказание
-                with torch.no_grad():
-                    t = tensor.unsqueeze(0)
-                    output = model(t)
-                    pred = output.argmax(dim=1).item()
-                    predicted_number += str(pred)
-            else:
-                # Если клетка пустая, ставим прочерк или ноль (по стандартам ОГЭ)
-                predicted_number += "_"
-        
-        # Вывод результатов
-        st.divider()
-        st.success(f"### Распознанный ответ: **{predicted_number}**")
-        
-        # Сверка с эталоном
-        if st.button("✅ Сверить с эталоном"):
-            # Убираем прочерки для сравнения, если в эталоне их нет
-            clean_predicted = predicted_number.replace("_", "")
-            
-            if clean_predicted == correct_answer:
-                st.balloons()
-                st.success(f"Отлично! Ответ {clean_predicted} полностью совпадает с ключом.")
-            else:
-                st.error(f"Ошибка! Распознано: {clean_predicted}. Правильный ответ: {correct_answer}.")
+            # Проходим по каждой строке (сверху вниз)
+            for r in range(num_rows):
+                row_str = ""
+                y_start = int(r * row_height)
+                y_end = int((r + 1) * row_height)
                 
-        # Технический блок (для защиты)
-        with st.expander("Показать, как нейросеть видит клетки"):
-            cols = st.columns(num_cells)
-            for i in range(num_cells):
-                x_start = int(i * cell_width)
-                x_end = int((i + 1) * cell_width)
-                cell = cropped_image.crop((x_start, 0, x_end, height))
-                cols[i].image(cell, caption=f"Клетка {i+1}", clamp=True)
+                # Проходим по каждой клетке в строке (слева направо)
+                for c in range(num_cells):
+                    x_start = int(c * cell_width)
+                    x_end = int((c + 1) * cell_width)
+                    
+                    cell = cropped_image.crop((x_start, y_start, x_end, y_end))
+                    tensor = process_single_digit(cell)
+                    
+                    if tensor is not None:
+                        with torch.no_grad():
+                            t = tensor.unsqueeze(0)
+                            output = model(t)
+                            pred = output.argmax(dim=1).item()
+                            row_str += str(pred)
+                    else:
+                        row_str += "_" # Если клетка пустая
+                
+                results.append(row_str)
+            
+            # Вывод результатов
+            st.success("### Результаты сканирования:")
+            for i, res in enumerate(results):
+                st.write(f"**Задание {i+1}:** {res}")
