@@ -93,7 +93,7 @@ with st.sidebar:
     st.header("Настройки проверки")
     st.write("Введите правильные ответы (ключ):")
     correct_answer = st.text_input("Эталонный ответ:", value="54029")
-    num_rows = st.number_input("Сколько строк сканировать?", min_value=1, max_value=20, value=10)
+    num_rows = st.number_input("Сколько строк сканировать?", min_value=1, max_value=20, value=11)
     num_cells = st.number_input("Сколько клеток в строке?", min_value=1, max_value=25, value=17)
 
 # Выбор фото
