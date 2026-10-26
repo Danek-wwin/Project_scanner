@@ -146,7 +146,7 @@ def find_blank_and_answers(image):
     top_padding = 20 
     final_table_top = table_top + top_padding
 
-return (bx, by, bw, bh), (answer_x_start, final_table_top, answer_x_end, table_bottom)
+    return (bx, by, bw, bh), (answer_x_start, final_table_top, answer_x_end, table_bottom)
 
 # ===== 4. ИНТЕРФЕЙС =====
 st.set_page_config(page_title="Умный Сканер ОГЭ", page_icon="📝")
