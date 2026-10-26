@@ -131,7 +131,7 @@ def find_blank_and_answers(image, num_rows):
     final_top = table_top + int(row_height)
     
     # Отступаем снизу тоже на 0.5 строки (чтобы не захватить "Замену ответов")
-    final_bottom = table_bottom - int(row_height * 5)
+    final_bottom = table_bottom - int(row_height * 3)
 
     # 4. Левая и правая границы
     answer_x_start = bx + int(bw * 0.06) # Отступаем слева, чтобы пропустить номера заданий
