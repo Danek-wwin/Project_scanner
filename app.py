@@ -135,7 +135,7 @@ def find_blank_and_answers(image, num_rows):
 
     # 4. Левая и правая границы
     answer_x_start = bx + int(bw * 0.06) # Отступаем слева, чтобы пропустить номера заданий
-    answer_x_end = bx + int(bw * 0.48)   # Отступаем справа, чтобы не захватить вторую колонку
+    answer_x_end = bx + int(bw * 0.5)   # Отступаем справа, чтобы не захватить вторую колонку
     
     return (bx, by, bw, bh), (answer_x_start, final_top, answer_x_end, final_bottom)
 
