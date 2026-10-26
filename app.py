@@ -80,38 +80,66 @@ def process_single_digit(cell_image):
 
 # ===== 3. АВТО-ПОИСК БЛАНКА =====
 def find_blank_and_answers(image):
-    """Находит лист бланка на фото и вычисляет область с ответами."""
+    """Находит бланк и область ответов, ориентируясь на колонку с номерами заданий."""
     img = image.convert('L')
     arr = np.array(img)
     
-    # 1. Делаем бинаризацию, чтобы найти белый лист на фоне стола
+    # 1. Ищем сам бланк (самый большой белый контур)
     _, thresh = cv2.threshold(arr, 200, 255, cv2.THRESH_BINARY)
-    
-    # Ищем контуры листа
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     if not contours:
         return None
         
-    # Находим самый большой контур (это и есть бланк)
     c = max(contours, key=cv2.contourArea)
-    x, y, w, h = cv2.boundingRect(c)
+    bx, by, bw, bh = cv2.boundingRect(c)
     
-    # Если бланк слишком маленький, значит не нашли
-    if w < image.width * 0.3 or h < image.height * 0.3:
+    if bw < image.width * 0.3 or bh < image.height * 0.3:
         return None
+
+    # 2. Ищем внутри бланка горизонтальную линию (она находится над таблицей ответов)
+    # Обрезаем шапку бланка для поиска (берем область от 15% до 85% высоты листа)
+    search_area = arr[by + int(bh*0.15) : by + int(bh*0.85), bx:bx+bw]
+    
+    # Бинаризация для поиска линий
+    _, thresh_lines = cv2.threshold(search_area, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    
+    # Ищем длинные горизонтальные линии
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (int(bw*0.4), 1))
+    detected_lines = cv2.morphologyEx(thresh_lines, cv2.MORPH_OPEN, kernel, iterations=2)
+    
+    line_contours, _ = cv2.findContours(detected_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not line_contours:
+        # Если линии не найдены, возвращаемся к пропорциям (но более точным)
+        return (bx, by, bw, bh), (bx + int(bw*0.02), by + int(bh*0.40), bx + int(bw*0.50), by + int(bh*0.85))
+    
+    # Сортируем линии по Y
+    lines = [(cv2.boundingRect(lc)[1] + by + int(bh*0.15), cv2.boundingRect(lc)[0]) for lc in line_contours]
+    lines.sort(key=lambda x: x[0])
+    
+    # Верхняя линия таблицы — это та, что находится примерно на 35-45% высоты
+    table_top = None
+    for l_y, l_x in lines:
+        if by + bh*0.30 < l_y < by + bh*0.55:
+            table_top = l_y
+            break
+            
+    if table_top is None:
+        table_top = by + int(bh * 0.40)
         
-    # 2. Теперь вычисляем область с ответами ВНУТРИ бланка
-    # По стандарту ОГЭ, таблица с ответами (1-12) занимает:
-    # - по вертикали: от 30% до 75% высоты бланка
-    # - по горизонтали: левую половину (до 50% ширины)
+    # Нижняя граница — это линия прямо над "Заменой ответов" (обычно 85-90% высоты)
+    table_bottom = by + int(bh * 0.88)
+    for l_y, l_x in reversed(lines):
+        if by + bh*0.75 < l_y < by + bh*0.92:
+            table_bottom = l_y
+            break
+
+    # 3. Определяем левую и правую границы (таблица занимает примерно половину ширины)
+    answer_x_start = bx + int(bw * 0.02)
+    answer_x_end = bx + int(bw * 0.50)
     
-    answer_y_start = y + int(h * 0.30)
-    answer_y_end = y + int(h * 0.75)
-    answer_x_start = x + int(w * 0.02)  # Небольшой отступ слева
-    answer_x_end = x + int(w * 0.50)    # Левая половина
-    
-    return (x, y, w, h), (answer_x_start, answer_y_start, answer_x_end, answer_y_end)
+    return (bx, by, bw, bh), (answer_x_start, table_top, answer_x_end, table_bottom)
 
 # ===== 4. ИНТЕРФЕЙС =====
 st.set_page_config(page_title="Авто-Сканер ОГЭ", page_icon="📝")
