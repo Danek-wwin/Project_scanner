@@ -6,7 +6,6 @@ from torchvision import transforms
 from PIL import Image, ImageOps, ImageDraw
 import numpy as np
 import cv2
-from streamlit_cropper import st_cropper
 
 # ===== 1. АРХИТЕКТУРА НЕЙРОСЕТИ =====
 class Net(nn.Module):
@@ -79,13 +78,48 @@ def process_single_digit(cell_image):
         pred = output.argmax(dim=1).item()
         return str(pred)
 
-# ===== 3. ИНТЕРФЕЙС =====
-st.set_page_config(page_title="Сканер ОГЭ", page_icon="📝")
-st.title("📝 Сканер бланков ОГЭ (Поиск по линиям)")
+# ===== 3. АВТО-ПОИСК БЛАНКА =====
+def find_blank_and_answers(image):
+    """Находит лист бланка на фото и вычисляет область с ответами."""
+    img = image.convert('L')
+    arr = np.array(img)
+    
+    # 1. Делаем бинаризацию, чтобы найти белый лист на фоне стола
+    _, thresh = cv2.threshold(arr, 200, 255, cv2.THRESH_BINARY)
+    
+    # Ищем контуры листа
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        return None
+        
+    # Находим самый большой контур (это и есть бланк)
+    c = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(c)
+    
+    # Если бланк слишком маленький, значит не нашли
+    if w < image.width * 0.3 or h < image.height * 0.3:
+        return None
+        
+    # 2. Теперь вычисляем область с ответами ВНУТРИ бланка
+    # По стандарту ОГЭ, таблица с ответами (1-12) занимает:
+    # - по вертикали: от 30% до 75% высоты бланка
+    # - по горизонтали: левую половину (до 50% ширины)
+    
+    answer_y_start = y + int(h * 0.30)
+    answer_y_end = y + int(h * 0.75)
+    answer_x_start = x + int(w * 0.02)  # Небольшой отступ слева
+    answer_x_end = x + int(w * 0.50)    # Левая половина
+    
+    return (x, y, w, h), (answer_x_start, answer_y_start, answer_x_end, answer_y_end)
+
+# ===== 4. ИНТЕРФЕЙС =====
+st.set_page_config(page_title="Авто-Сканер ОГЭ", page_icon="📝")
+st.title("📝 Сканер бланков ОГЭ (Авто-поиск)")
 
 with st.sidebar:
     st.header("Настройки")
-    num_rows = st.number_input("Сколько всего строк сканировать?", min_value=1, max_value=20, value=12)
+    num_rows = st.number_input("Сколько строк сканировать?", min_value=1, max_value=20, value=12)
     num_cells = st.number_input("Сколько клеток в строке?", min_value=1, max_value=25, value=17)
 
 option = st.radio("Способ ввода:", ["📁 Загрузить файл", "📷 Сделать фото"], horizontal=True)
@@ -101,46 +135,66 @@ else:
         image = Image.open(picture)
 
 if image is not None:
-    st.warning("⚠️ Выделите рамкой **ВЕСЬ блок с ответами** (с 1 по 12 задание).")
-    
-    cropped_image = st_cropper(
-        image, 
-        realtime_update=True, 
-        box_color='#FF0000', 
-        aspect_ratio=None
-    )
-    
     if st.button("🚀 Начать сканирование"):
-        with st.spinner('Сканируем бланк...'):
-            # Просто делим выделенную область на равные строки и клетки
-            width, height = cropped_image.size
+        with st.spinner('Ищем бланк и распознаем ответы...'):
             
-            row_height = height / num_rows
-            cell_width = width / num_cells
+            # 1. Программа сама находит бланк и область ответов
+            result = find_blank_and_answers(image)
             
-            results = []
-            
-            for r in range(num_rows):
-                row_str = ""
-                y_start = int(r * row_height)
-                y_end = int((r + 1) * row_height)
+            if not result:
+                st.error("Не удалось найти бланк на фото. Сфотографируйте его на контрастном фоне (например, на темном столе).")
+            else:
+                blank_box, answer_box = result
+                bx, by, bw, bh = blank_box
+                ax1, ay1, ax2, ay2 = answer_box
                 
-                for c in range(num_cells):
-                    x_start = int(c * cell_width)
-                    x_end = int((c + 1) * cell_width)
+                # 2. Вырезаем найденную область с ответами
+                cropped_image = image.crop((ax1, ay1, ax2, ay2))
+                
+                # 3. Нарезаем на строки и клетки
+                w = ax2 - ax1
+                h = ay2 - ay1
+                
+                row_height = h / num_rows
+                cell_width = w / num_cells
+                
+                results = []
+                
+                for r in range(num_rows):
+                    row_str = ""
+                    y_start = int(r * row_height)
+                    y_end = int((r + 1) * row_height)
                     
-                    cell = cropped_image.crop((x_start, y_start, x_end, y_end))
-                    digit = process_single_digit(cell)
-                    row_str += digit
+                    for c in range(num_cells):
+                        x_start = int(c * cell_width)
+                        x_end = int((c + 1) * cell_width)
+                        
+                        cell = cropped_image.crop((x_start, y_start, x_end, y_end))
+                        digit = process_single_digit(cell)
+                        row_str += digit
+                    
+                    results.append(row_str)
                 
-                results.append(row_str)
-            
-            st.success("Сканирование завершено!")
-            st.write("### Результаты:")
-            
-            for i, res in enumerate(results):
-                clean_res = res.replace("_", "")
-                if clean_res:
-                    st.write(f"**Задание {i+1}:** {clean_res}")
-                else:
-                    st.write(f"**Задание {i+1}:** *нет ответа*")
+                # Вывод
+                st.success("Сканирование завершено!")
+                st.write("### Результаты:")
+                
+                for i, res in enumerate(results):
+                    clean_res = res.replace("_", "")
+                    if clean_res:
+                        st.write(f"**Задание {i+1}:** {clean_res}")
+                    else:
+                        st.write(f"**Задание {i+1}:** *нет ответа*")
+                
+                # Визуализация того, что нашла программа
+                with st.expander("Показать, как программа нашла бланк"):
+                    draw_img = image.copy()
+                    draw = ImageDraw.Draw(draw_img)
+                    
+                    # Синяя рамка — весь бланк
+                    draw.rectangle([bx, by, bx+bw, by+bh], outline="blue", width=3)
+                    
+                    # Зеленая рамка — область с ответами
+                    draw.rectangle([ax1, ay1, ax2, ay2], outline="green", width=3)
+                    
+                    st.image(draw_img, caption="Синий — найденный лист, Зеленый — область ответов", use_container_width=True)
