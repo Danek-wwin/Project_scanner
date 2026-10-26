@@ -45,6 +45,7 @@ def process_single_digit(cell_image):
     img = ImageOps.invert(img)
     arr = np.array(img)
     
+    # Бинаризация
     _, arr = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     kernel = np.ones((2,2), np.uint8)
     arr = cv2.morphologyEx(arr, cv2.MORPH_OPEN, kernel)
@@ -62,6 +63,7 @@ def process_single_digit(cell_image):
         
     digit_arr = arr[y:y+h, x:x+w]
     
+    # Вписываем в квадрат 28x28
     size = max(h, w)
     pad = int(size * 0.2)
     square = np.zeros((size + 2*pad, size + 2*pad), dtype=np.uint8)
@@ -79,58 +81,68 @@ def process_single_digit(cell_image):
         pred = output.argmax(dim=1).item()
         return str(pred)
 
-# ===== 3. АВТОМАТИЧЕСКИЙ ПОИСК СТРОК =====
-def find_rows_automatically(image, expected_rows):
-    """Находит горизонтальные строки на основе контуров клеток."""
+# ===== 3. УМНЫЙ ПОИСК КЛЕТОК (Игнорирует разные пробелы) =====
+def find_cells_smart(image):
+    """Находит квадратные клетки, склеивая пунктирные линии."""
     img = image.convert('L')
     img = ImageOps.invert(img)
     arr = np.array(img)
     
+    # 1. Бинаризация
     _, arr = cv2.threshold(arr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     
-    # Склеиваем пунктир, чтобы клетки стали целыми квадратами
+    # 2. СКЛЕИВАЕМ ПУНКТИР (Morphological Closing)
+    # Берем ядро 3x3 (или 5x5, если пунктир совсем редкий) и "закрываем" промежутки
     kernel = np.ones((3, 3), np.uint8)
     arr_closed = cv2.morphologyEx(arr, cv2.MORPH_CLOSE, kernel, iterations=2)
     
+    # 3. Ищем контуры на уже склеенной картинке
     contours, _ = cv2.findContours(arr_closed, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     
-    cells_y = []
+    cells = []
     for c in contours:
         x, y, w, h = cv2.boundingRect(c)
         aspect_ratio = w / float(h)
         area = w * h
-        # Ищем только квадратные объекты (клетки)
-        if 0.7 < aspect_ratio < 1.3 and area > 300: 
-            cells_y.append(y + h / 2) # Запоминаем центр клетки по Y
+        
+        # Клетки должны быть квадратными (от 0.8 до 1.2) и достаточно большими
+        if 0.8 < aspect_ratio < 1.2 and area > 500: 
+            cells.append((x, y, w, h))
             
-    if not cells_y:
-        return None
+    if not cells:
+        return [], []
 
-    # Сортируем все найденные Y-координаты
-    cells_y.sort()
+    # 4. Сортируем по Y (сверху вниз)
+    cells.sort(key=lambda b: b[1])
     
-    # Группируем близкие координаты (это одна строка)
-    rows_y = []
-    current_row = [cells_y[0]]
+    # 5. Группируем в строки
+    rows = []
+    current_row = [cells[0]]
     
-    for y in cells_y[1:]:
-        if abs(y - current_row[-1]) < 30: # Если координаты близко — это одна строка
-            current_row.append(y)
+    for cell in cells[1:]:
+        prev_center_y = current_row[-1][1] + current_row[-1][3] / 2
+        curr_center_y = cell[1] + cell[3] / 2
+        
+        # Если центры клеток по высоте почти совпадают — это одна строка
+        if abs(curr_center_y - prev_center_y) < (cell[3] * 0.8): 
+            current_row.append(cell)
         else:
-            rows_y.append(np.mean(current_row)) # Берем среднюю высоту строки
-            current_row = [y]
-    rows_y.append(np.mean(current_row))
-    
-    return rows_y
+            current_row.sort(key=lambda b: b[0])
+            rows.append(current_row)
+            current_row = [cell]
+            
+    if current_row:
+        current_row.sort(key=lambda b: b[0])
+        rows.append(current_row)
+        
+    return rows, cells
 
 # ===== 4. ИНТЕРФЕЙС =====
 st.set_page_config(page_title="Сканер ОГЭ", page_icon="📝")
-st.title("📝 Прототип сканера бланков ОГЭ (Авто-поиск строк)")
+st.title("📝 Прототип сканера бланков ОГЭ (Умный поиск)")
 
-with st.sidebar:
-    st.header("Настройки сканера")
-    num_rows = st.number_input("Сколько всего строк сканировать?", min_value=1, max_value=20, value=12)
-    num_cells = st.number_input("Сколько клеток в строке?", min_value=1, max_value=25, value=17)
+st.write("Загрузите фото бланка. Программа сама найдет клетки и правильно сгруппирует их по строкам.")
+st.info("⚠️ Фотографируйте бланк ровно, чтобы клетки были квадратными. Выделяйте только область с ответами.")
 
 option = st.radio("Способ ввода:", ["📁 Загрузить файл", "📷 Сделать фото"], horizontal=True)
 image = None
@@ -145,7 +157,7 @@ else:
         image = Image.open(picture)
 
 if image is not None:
-    st.warning("⚠️ Выделите рамкой **ВЕСЬ блок с ответами** (с 1 по 12 задание).")
+    st.write("Шаг 1: Выделите рамкой область с ответами (желательно только сами клетки).")
     
     cropped_image = st_cropper(
         image, 
@@ -155,63 +167,34 @@ if image is not None:
     )
     
     if st.button("🚀 Начать сканирование"):
-        with st.spinner('Ищем строки и распознаем...'):
+        with st.spinner('Ищем клетки и распознаем...'):
+            # Используем новую умную функцию
+            rows, all_cells = find_cells_smart(cropped_image)
             
-            # 1. Программа сама находит, где находятся строки на фото
-            found_row_centers = find_rows_automatically(cropped_image, num_rows)
-            
-            if not found_row_centers:
-                st.error("Не удалось найти клетки для авто-разметки. Попробуйте сфотографировать ровнее.")
+            if not rows:
+                st.error("Клетки не найдены. Попробуйте выделить область ровнее или сфотографировать бланк без теней.")
             else:
-                width, height = cropped_image.size
-                cell_width = width / num_cells
+                st.success(f"Найдено строк: {len(rows)}")
                 
                 results = []
-                
-                # 2. Идем по найденным центрам строк и вырезаем их
-                # Если программа нашла больше строк, чем нужно, берем первые num_rows
-                actual_rows = min(len(found_row_centers), num_rows)
-                
-                for r in range(actual_rows):
+                for row in rows:
                     row_str = ""
-                    center_y = found_row_centers[r]
-                    
-                    # Высота строки — это примерно ширина клетки (так как она квадратная)
-                    row_height = cell_width 
-                    y_start = int(center_y - row_height / 2)
-                    y_end = int(center_y + row_height / 2)
-                    
-                    # Защита от выхода за границы картинки
-                    y_start = max(0, y_start)
-                    y_end = min(height, y_end)
-                    
-                    for c in range(num_cells):
-                        x_start = int(c * cell_width)
-                        x_end = int((c + 1) * cell_width)
-                        
-                        cell = cropped_image.crop((x_start, y_start, x_end, y_end))
-                        digit = process_single_digit(cell)
+                    # Берем только первые 17 клеток в строке (если найдет больше)
+                    for i in range(min(17, len(row))):
+                        x, y, w, h = row[i]
+                        cell_img = cropped_image.crop((x, y, x+w, y+h))
+                        digit = process_single_digit(cell_img)
                         row_str += digit
-                    
                     results.append(row_str)
                 
-                st.success(f"Распознано строк: {len(results)}")
+                # Вывод
                 st.write("### Результаты по заданиям:")
-                
                 for i, res in enumerate(results):
                     clean_res = res.replace("_", "")
-                    if clean_res:
-                        st.write(f"**Задание {i+1}:** {clean_res}")
-                    else:
-                        st.write(f"**Задание {i+1}:** *нет ответа*")
-                        
-                # Визуализация (рисуем линии там, где программа нашла строки)
-                with st.expander("Показать, как программа нашла строки"):
+                    st.write(f"**Строка {i+1}:** {clean_res}")
+                    
+                # Отладка
+                with st.expander("Показать, как программа нашла клетки"):
                     draw_img = cropped_image.copy()
                     draw = ImageDraw.Draw(draw_img)
-                    
-                    for center_y in found_row_centers[:num_rows]:
-                        y = int(center_y)
-                        draw.line([(0, y), (width, y)], fill="red", width=3)
-                        
-                    st.image(draw_img, caption="Красные линии — центры найденных строк", use_container_width=True)
+                    for (x, y, w, h) in all_cells:
