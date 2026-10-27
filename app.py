@@ -149,38 +149,39 @@ with st.sidebar:
         # Блок загрузки файла с ключами
         key_file = st.file_uploader("Загрузить файл с ключами (.txt)", type=["txt"])
         
+        # Инициализируем память для ответов, если ее еще нет
+        if 'answers_dict' not in st.session_state:
+            st.session_state.answers_dict = {i: "" for i in range(2, 13)}
+        
+        # Если загружен новый файл — читаем его и обновляем память
         if key_file is not None:
-            # Читаем файл и разбиваем по строкам
             file_content = key_file.getvalue().decode("utf-8")
-            # Убираем пустые строки
             lines = [line.strip() for line in file_content.splitlines() if line.strip()]
             
-            # Распределяем ответы по заданиям (начиная с 2-го)
+            # Распределяем ответы по заданиям
             for idx, ans in enumerate(lines):
                 task_num = idx + 2
-                if task_num <= 12: # Ограничиваем до 12 заданий
-                    answers_dict[task_num] = ans
+                if task_num <= 12:
+                    st.session_state.answers_dict[task_num] = ans
                     
-            st.success(f"Загружено ответов: {len(answers_dict)}")
+            st.success(f"Загружено ответов: {len(lines)}. Значения подставлены ниже.")
 
         st.write("---")
         st.write("Или введите ответы вручную:")
         
-        # Создаем поля для ввода (они автоматически заполнятся, если загружен файл)
+        # Создаем поля для ввода. Берем значения из памяти.
         col_a, col_b = st.columns(2)
         for i in range(2, 13):
-            # Если ответ для задания уже есть в словаре (из файла), подставляем его
-            default_val = answers_dict.get(i, "")
+            # Берем значение из памяти
+            current_val = st.session_state.answers_dict.get(i, "")
             
             if i % 2 == 0:
                 with col_a:
-                    val = st.text_input(f"Задание {i}", value=default_val, key=f"ans_{i}").strip()
-                    answers_dict[i] = val
+                    # Ключ (key) должен быть уникальным
+                    st.text_input(f"Задание {i}", value=current_val, key=f"input_{i}", on_change=lambda i=i: st.session_state.answers_dict.update({i: st.session_state[f"input_{i}"]}))
             else:
                 with col_b:
-                    val = st.text_input(f"Задание {i}", value=default_val, key=f"ans_{i}").strip()
-                    answers_dict[i] = val
-
+                    st.text_input(f"Задание {i}", value=current_val, key=f"input_{i}", on_change=lambda i=i: st.session_state.answers_dict.update({i: st.session_state[f"input_{i}"]}))
 # --- ОСНОВНОЙ ЭКРАН ---
 option = st.radio("Способ ввода фото:", ["📁 Загрузить файл", "📷 Сделать фото"], horizontal=True)
 image = None
