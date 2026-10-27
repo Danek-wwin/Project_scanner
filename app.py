@@ -128,13 +128,27 @@ def find_blank_and_answers(image, num_rows):
     
     return (bx, by, bw, bh), (answer_x_start, final_top, answer_x_end, final_bottom)
 
-# ===== 4. ИНТЕРФЕЙС =====
+# ===== 4. ФУНКЦИЯ ЗАГРУЗКИ КЛЮЧЕЙ =====
+def load_keys_from_file():
+    """Эта функция срабатывает сразу при загрузке файла и заполняет поля."""
+    file = st.session_state.get('key_file')
+    if file is not None:
+        file_content = file.getvalue().decode("utf-8")
+        lines = [line.strip() for line in file_content.splitlines() if line.strip()]
+        
+        # Очищаем старые значения
+        for i in range(2, 13):
+            st.session_state[f"input_{i}"] = ""
+            
+        # Заполняем новыми
+        for idx, ans in enumerate(lines):
+            task_num = idx + 2
+            if task_num <= 12:
+                st.session_state[f"input_{task_num}"] = ans
+
+# ===== 5. ИНТЕРФЕЙС =====
 st.set_page_config(page_title="Авто-Сканер ОГЭ", page_icon="📝")
 st.title("📝 Сканер бланков ОГЭ")
-
-# Инициализируем память для хранения ответов (чтобы они не пропадали при перезагрузке)
-if 'answers_dict' not in st.session_state:
-    st.session_state.answers_dict = {i: "" for i in range(2, 13)}
 
 # --- БОКОВАЯ ПАНЕЛЬ ---
 with st.sidebar:
@@ -145,40 +159,31 @@ with st.sidebar:
     st.divider()
     
     with st.expander("🔑 Настроить ключ с ответами", expanded=False):
-        st.write("Загрузите txt-файл с ответами (каждый ответ с новой строки, начиная с задания 2) или введите вручную.")
+        st.write("Загрузите txt-файл с ответами (каждый ответ с новой строки) или введите вручную.")
         
-        # Блок загрузки файла с ключами
-        key_file = st.file_uploader("Загрузить файл с ключами (.txt)", type=["txt"])
+        # Загрузчик файла. Параметр on_change вызывает функцию при загрузке.
+        st.file_uploader(
+            "Загрузить файл с ключами (.txt)", 
+            type=["txt"], 
+            key="key_file", 
+            on_change=load_keys_from_file # <-- ВОТ МАГИЯ: привязываем функцию
+        )
         
-        if key_file is not None:
-            file_content = key_file.getvalue().decode("utf-8")
-            lines = [line.strip() for line in file_content.splitlines() if line.strip()]
-            
-            # Распределяем ответы по заданиям и сохраняем в память
-            for idx, ans in enumerate(lines):
-                task_num = idx + 2
-                if task_num <= 12:
-                    st.session_state.answers_dict[task_num] = ans
-                    
-            st.success(f"Загружено ответов: {len(lines)}. Значения подставлены ниже.")
-
         st.write("---")
         st.write("Или введите ответы вручную:")
         
         col_a, col_b = st.columns(2)
         for i in range(2, 13):
-            # Берем текущее значение из памяти
-            current_val = st.session_state.answers_dict.get(i, "")
-            
+            # Если ключа в памяти еще нет, создаем пустой
+            if f"input_{i}" not in st.session_state:
+                st.session_state[f"input_{i}"] = ""
+                
             if i % 2 == 0:
                 with col_a:
-                    # При изменении поля обновляем память
-                    val = st.text_input(f"Задание {i}", value=current_val, key=f"input_{i}")
-                    st.session_state.answers_dict[i] = val
+                    st.text_input(f"Задание {i}", key=f"input_{i}")
             else:
                 with col_b:
-                    val = st.text_input(f"Задание {i}", value=current_val, key=f"input_{i}")
-                    st.session_state.answers_dict[i] = val
+                    st.text_input(f"Задание {i}", key=f"input_{i}")
 
 # --- ОСНОВНОЙ ЭКРАН ---
 option = st.radio("Способ ввода фото:", ["📁 Загрузить файл", "📷 Сделать фото"], horizontal=True)
@@ -216,7 +221,6 @@ if image is not None:
                 
                 results = []
                 
-                # Распознавание
                 for r in range(num_rows):
                     row_str = ""
                     y_start = int(r * row_height)
@@ -232,7 +236,6 @@ if image is not None:
                     
                     results.append(row_str)
                 
-                # --- ВЫВОД РЕЗУЛЬТАТОВ ---
                 st.success("Сканирование завершено!")
                 
                 with st.expander("📊 Показать результаты и проверку", expanded=True):
@@ -248,8 +251,9 @@ if image is not None:
                     for i, res in enumerate(results):
                         task_num = i + 2 
                         clean_res = res.replace("_", "")
-                        # Берем эталон из памяти приложения
-                        etalon = st.session_state.answers_dict.get(task_num, "")
+                        
+                        # Берем значение из поля ввода
+                        etalon = st.session_state.get(f"input_{task_num}", "")
                         
                         if etalon != "":
                             total_checked += 1
@@ -270,7 +274,6 @@ if image is not None:
                     if total_checked > 0:
                         st.info(f"**Итого проверено:** {total_checked} | **Верно:** {correct_count} | **Ошибок:** {total_checked - correct_count}")
                 
-                # Визуализация
                 with st.expander("🖼️ Показать, как программа нашла бланк"):
                     draw_img = image.copy()
                     draw = ImageDraw.Draw(draw_img)
