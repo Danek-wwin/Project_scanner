@@ -1,4 +1,4 @@
-import streamlit as st
+ import streamlit as st
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -132,8 +132,9 @@ def find_blank_and_answers(image, num_rows):
 st.set_page_config(page_title="Авто-Сканер ОГЭ", page_icon="📝")
 st.title("📝 Сканер бланков ОГЭ")
 
-# Словарь для хранения ответов
-answers_dict = {}
+# Инициализируем память для хранения ответов (чтобы они не пропадали при перезагрузке)
+if 'answers_dict' not in st.session_state:
+    st.session_state.answers_dict = {i: "" for i in range(2, 13)}
 
 # --- БОКОВАЯ ПАНЕЛЬ ---
 with st.sidebar:
@@ -149,16 +150,11 @@ with st.sidebar:
         # Блок загрузки файла с ключами
         key_file = st.file_uploader("Загрузить файл с ключами (.txt)", type=["txt"])
         
-        # Инициализируем память для ответов, если ее еще нет
-        if 'answers_dict' not in st.session_state:
-            st.session_state.answers_dict = {i: "" for i in range(2, 13)}
-        
-        # Если загружен новый файл — читаем его и обновляем память
         if key_file is not None:
             file_content = key_file.getvalue().decode("utf-8")
             lines = [line.strip() for line in file_content.splitlines() if line.strip()]
             
-            # Распределяем ответы по заданиям
+            # Распределяем ответы по заданиям и сохраняем в память
             for idx, ans in enumerate(lines):
                 task_num = idx + 2
                 if task_num <= 12:
@@ -169,19 +165,21 @@ with st.sidebar:
         st.write("---")
         st.write("Или введите ответы вручную:")
         
-        # Создаем поля для ввода. Берем значения из памяти.
         col_a, col_b = st.columns(2)
         for i in range(2, 13):
-            # Берем значение из памяти
+            # Берем текущее значение из памяти
             current_val = st.session_state.answers_dict.get(i, "")
             
             if i % 2 == 0:
                 with col_a:
-                    # Ключ (key) должен быть уникальным
-                    st.text_input(f"Задание {i}", value=current_val, key=f"input_{i}", on_change=lambda i=i: st.session_state.answers_dict.update({i: st.session_state[f"input_{i}"]}))
+                    # При изменении поля обновляем память
+                    val = st.text_input(f"Задание {i}", value=current_val, key=f"input_{i}")
+                    st.session_state.answers_dict[i] = val
             else:
                 with col_b:
-                    st.text_input(f"Задание {i}", value=current_val, key=f"input_{i}", on_change=lambda i=i: st.session_state.answers_dict.update({i: st.session_state[f"input_{i}"]}))
+                    val = st.text_input(f"Задание {i}", value=current_val, key=f"input_{i}")
+                    st.session_state.answers_dict[i] = val
+
 # --- ОСНОВНОЙ ЭКРАН ---
 option = st.radio("Способ ввода фото:", ["📁 Загрузить файл", "📷 Сделать фото"], horizontal=True)
 image = None
@@ -250,7 +248,8 @@ if image is not None:
                     for i, res in enumerate(results):
                         task_num = i + 2 
                         clean_res = res.replace("_", "")
-                        etalon = answers_dict.get(task_num, "")
+                        # Берем эталон из памяти приложения
+                        etalon = st.session_state.answers_dict.get(task_num, "")
                         
                         if etalon != "":
                             total_checked += 1
