@@ -136,8 +136,8 @@ def find_blank_and_answers(image, num_rows):
     detected_lines = cv2.morphologyEx(thresh_lines, cv2.MORPH_OPEN, kernel, iterations=2)
     line_contours, _ = cv2.findContours(detected_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    table_top = by + int(bh * 0.40)
-    table_bottom = by + int(bh * 0.85)
+    table_top = by + int(bh)
+    table_bottom = by + int(bh * 0.8)
 
     if line_contours:
         lines = [(cv2.boundingRect(lc)[1] + by + int(bh*0.15), cv2.boundingRect(lc)[0]) for lc in line_contours]
@@ -155,11 +155,11 @@ def find_blank_and_answers(image, num_rows):
     table_height = table_bottom - table_top
     row_height = table_height / num_rows
     
-    final_top = table_top + int(row_height)
-    final_bottom = table_bottom - int(row_height * 3)
+    final_top = table_top + int(row_height * 1.1)
+    final_bottom = table_bottom - int(row_height * 3.2)
 
     answer_x_start = bx + int(bw * 0.06)
-    answer_x_end = bx + int(bw * 0.5)
+    answer_x_end = bx + int(bw * 0.49)
     
     return (bx, by, bw, bh), (answer_x_start, final_top, answer_x_end, final_bottom)
 
