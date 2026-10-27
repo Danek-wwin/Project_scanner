@@ -78,13 +78,11 @@ def process_single_digit(cell_image):
         pred = output.argmax(dim=1).item()
         return str(pred)
 
-# ===== 3. АВТО-ПОИСК БЛАНКА (С УМНЫМИ ОТСТУПАМИ) =====
+# ===== 3. АВТО-ПОИСК БЛАНКА =====
 def find_blank_and_answers(image, num_rows):
-    """Находит бланк и область ответов, делая отступы в зависимости от размера строки."""
     img = image.convert('L')
     arr = np.array(img)
     
-    # 1. Ищем сам бланк
     _, thresh = cv2.threshold(arr, 200, 255, cv2.THRESH_BINARY)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
@@ -97,14 +95,12 @@ def find_blank_and_answers(image, num_rows):
     if bw < image.width * 0.3 or bh < image.height * 0.3:
         return None
 
-    # 2. Ищем горизонтальные линии
     search_area = arr[by + int(bh*0.15) : by + int(bh*0.85), bx:bx+bw]
     _, thresh_lines = cv2.threshold(search_area, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (int(bw*0.4), 1))
     detected_lines = cv2.morphologyEx(thresh_lines, cv2.MORPH_OPEN, kernel, iterations=2)
     line_contours, _ = cv2.findContours(detected_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # Базовые границы (если линии не найдены)
     table_top = by + int(bh * 0.40)
     table_bottom = by + int(bh * 0.85)
 
@@ -121,33 +117,40 @@ def find_blank_and_answers(image, num_rows):
                 table_bottom = l_y
                 break
 
-    # 3. ВЫЧИСЛЯЕМ ОТСТУПЫ
-    # Высота всей таблицы
     table_height = table_bottom - table_top
-    # Высота одной строки
     row_height = table_height / num_rows
     
-    # Отступаем сверху ровно на 1 строку (чтобы пропустить заголовок "Результаты...")
     final_top = table_top + int(row_height)
-    
-    # Отступаем снизу тоже на 0.5 строки (чтобы не захватить "Замену ответов")
-    final_bottom = table_bottom - int(row_height * 3)
+    final_bottom = table_bottom - int(row_height * 3) # Отступ снизу
 
-    # 4. Левая и правая границы
-    answer_x_start = bx + int(bw * 0.06) # Отступаем слева, чтобы пропустить номера заданий
-    answer_x_end = bx + int(bw * 0.5)   # Отступаем справа, чтобы не захватить вторую колонку
+    answer_x_start = bx + int(bw * 0.06)
+    answer_x_end = bx + int(bw * 0.5)
     
     return (bx, by, bw, bh), (answer_x_start, final_top, answer_x_end, final_bottom)
 
 # ===== 4. ИНТЕРФЕЙС =====
 st.set_page_config(page_title="Авто-Сканер ОГЭ", page_icon="📝")
-st.title("📝 Сканер бланков ОГЭ (Умные отступы)")
+st.title("📝 Сканер бланков ОГЭ")
 
+# --- БОКОВАЯ ПАНЕЛЬ ---
 with st.sidebar:
-    st.header("Настройки")
+    st.header("Настройки сканера")
     num_rows = st.number_input("Сколько строк сканировать?", min_value=1, max_value=20, value=11)
     num_cells = st.number_input("Сколько клеток в строке?", min_value=1, max_value=25, value=17)
+    
+    st.divider()
+    
+    st.header("Ключ с ответами")
+    st.write("Введите правильные ответы для сверки:")
+    
+    # Создаем словарь для хранения эталонных ответов
+    correct_answers = {}
+    
+    # Генерируем поля ввода для каждого задания (с 2 по 12, так как 1-е обычно на бланке №2)
+    for i in range(2, 13):
+        correct_answers[i] = st.text_input(f"Задание {i}", key=f"ans_{i}").strip()
 
+# --- ОСНОВНОЙ ЭКРАН ---
 option = st.radio("Способ ввода:", ["📁 Загрузить файл", "📷 Сделать фото"], horizontal=True)
 image = None
 
@@ -161,10 +164,9 @@ else:
         image = Image.open(picture)
 
 if image is not None:
-    if st.button("🚀 Начать сканирование"):
+    if st.button("🚀 Начать сканирование и проверку"):
         with st.spinner('Ищем бланк и распознаем ответы...'):
             
-            # Передаем num_rows в функцию, чтобы она знала высоту строки
             result = find_blank_and_answers(image, num_rows)
             
             if not result:
@@ -174,7 +176,6 @@ if image is not None:
                 bx, by, bw, bh = blank_box
                 ax1, ay1, ax2, ay2 = answer_box
                 
-                # Вырезаем область с ответами
                 cropped_image = image.crop((ax1, ay1, ax2, ay2))
                 
                 w = ax2 - ax1
@@ -185,6 +186,7 @@ if image is not None:
                 
                 results = []
                 
+                # Распознавание
                 for r in range(num_rows):
                     row_str = ""
                     y_start = int(r * row_height)
@@ -200,26 +202,54 @@ if image is not None:
                     
                     results.append(row_str)
                 
-                # Вывод
+                # --- ВЫВОД РЕЗУЛЬТАТОВ С ПРОВЕРКОЙ ---
                 st.success("Сканирование завершено!")
-                st.write("### Результаты:")
+                st.write("### Результаты и проверка:")
+                
+                # Создаем колонки для красивого вывода (Задание | Распознано | Эталон | Статус)
+                col1, col2, col3, col4 = st.columns([1, 2, 2, 1])
+                col1.write("**№**")
+                col2.write("**Распознано**")
+                col3.write("**Эталон**")
+                col4.write("**Статус**")
+                
+                # Счетчики для статистики
+                correct_count = 0
+                total_checked = 0
                 
                 for i, res in enumerate(results):
+                    task_num = i + 2 # Так как распознавание начинается со 2-го задания
                     clean_res = res.replace("_", "")
-                    if clean_res:
-                        st.write(f"**Задание {i+2}:** {clean_res}")
+                    etalon = correct_answers.get(task_num, "")
+                    
+                    # Проверяем только если ввели эталон
+                    if etalon != "":
+                        total_checked += 1
+                        if clean_res == etalon:
+                            status = "✅ Верно"
+                            correct_count += 1
+                        else:
+                            status = "❌ Ошибка"
                     else:
-                        st.write(f"**Задание {i+2}:** *нет ответа*")
+                        status = "—" # Нет эталона для сверки
+                    
+                    # Выводим строку
+                    c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
+                    c1.write(f"{task_num}")
+                    c2.write(f"`{clean_res if clean_res else 'нет ответа'}`")
+                    c3.write(f"`{etalon}`" if etalon else "-")
+                    c4.write(status)
+                
+                # Итоговая статистика
+                if total_checked > 0:
+                    st.info(f"**Итого проверено:** {total_checked} | **Верно:** {correct_count} | **Ошибок:** {total_checked - correct_count}")
                 
                 # Визуализация
                 with st.expander("Показать, как программа нашла бланк"):
                     draw_img = image.copy()
                     draw = ImageDraw.Draw(draw_img)
                     
-                    # Синяя рамка — весь бланк
                     draw.rectangle([bx, by, bx+bw, by+bh], outline="blue", width=3)
-                    
-                    # Зеленая рамка — область с ответами (с нашими отступами)
                     draw.rectangle([ax1, ay1, ax2, ay2], outline="green", width=3)
                     
-                    st.image(draw_img, caption="Синий — лист, Зеленый — область ответов с отступами", use_container_width=True)
+                    st.image(draw_img, caption="Синий — лист, Зеленый — область ответов", use_container_width=True)
