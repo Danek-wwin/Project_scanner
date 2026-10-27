@@ -130,17 +130,14 @@ def find_blank_and_answers(image, num_rows):
 
 # ===== 4. ФУНКЦИЯ ЗАГРУЗКИ КЛЮЧЕЙ =====
 def load_keys_from_file():
-    """Эта функция срабатывает сразу при загрузке файла и заполняет поля."""
     file = st.session_state.get('key_file')
     if file is not None:
         file_content = file.getvalue().decode("utf-8")
         lines = [line.strip() for line in file_content.splitlines() if line.strip()]
         
-        # Очищаем старые значения
         for i in range(2, 13):
             st.session_state[f"input_{i}"] = ""
             
-        # Заполняем новыми
         for idx, ans in enumerate(lines):
             task_num = idx + 2
             if task_num <= 12:
@@ -159,14 +156,13 @@ with st.sidebar:
     st.divider()
     
     with st.expander("🔑 Настроить ключ с ответами", expanded=False):
-        st.write("Загрузите txt-файл с ответами (каждый ответ с новой строки) или введите вручную.")
+        st.write("Загрузите txt-файл с ответами или введите вручную.")
         
-        # Загрузчик файла. Параметр on_change вызывает функцию при загрузке.
         st.file_uploader(
             "Загрузить файл с ключами (.txt)", 
             type=["txt"], 
             key="key_file", 
-            on_change=load_keys_from_file # <-- ВОТ МАГИЯ: привязываем функцию
+            on_change=load_keys_from_file
         )
         
         st.write("---")
@@ -174,7 +170,6 @@ with st.sidebar:
         
         col_a, col_b = st.columns(2)
         for i in range(2, 13):
-            # Если ключа в памяти еще нет, создаем пустой
             if f"input_{i}" not in st.session_state:
                 st.session_state[f"input_{i}"] = ""
                 
@@ -220,6 +215,8 @@ if image is not None:
                 cell_width = w / num_cells
                 
                 results = []
+                # НОВОЕ: Список для хранения координат каждой клетки
+                all_cells_coords = []
                 
                 for r in range(num_rows):
                     row_str = ""
@@ -229,6 +226,9 @@ if image is not None:
                     for c in range(num_cells):
                         x_start = int(c * cell_width)
                         x_end = int((c + 1) * cell_width)
+                        
+                        # НОВОЕ: Сохраняем координаты клетки (с учетом смещения области ax1, ay1)
+                        all_cells_coords.append((ax1 + x_start, ay1 + y_start, ax1 + x_end, ay1 + y_end))
                         
                         cell = cropped_image.crop((x_start, y_start, x_end, y_end))
                         digit = process_single_digit(cell)
@@ -252,7 +252,6 @@ if image is not None:
                         task_num = i + 2 
                         clean_res = res.replace("_", "")
                         
-                        # Берем значение из поля ввода
                         etalon = st.session_state.get(f"input_{task_num}", "")
                         
                         if etalon != "":
@@ -277,6 +276,14 @@ if image is not None:
                 with st.expander("🖼️ Показать, как программа нашла бланк"):
                     draw_img = image.copy()
                     draw = ImageDraw.Draw(draw_img)
+                    
+                    # Синяя рамка (весь бланк)
                     draw.rectangle([bx, by, bx+bw, by+bh], outline="blue", width=3)
+                    # Зеленая рамка (область ответов)
                     draw.rectangle([ax1, ay1, ax2, ay2], outline="green", width=3)
-                    st.image(draw_img, caption="Синий — лист, Зеленый — область ответов", use_container_width=True)
+                    
+                    # НОВОЕ: Рисуем красные рамки вокруг каждой клетки
+                    for (cx1, cy1, cx2, cy2) in all_cells_coords:
+                        draw.rectangle([cx1, cy1, cx2, cy2], outline="red", width=1)
+                    
+                    st.image(draw_img, caption="Синий — лист, Зеленый — область ответов, Красные — клетки для распознавания", use_container_width=True)
