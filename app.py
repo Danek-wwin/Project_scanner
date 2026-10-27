@@ -120,8 +120,8 @@ def find_blank_and_answers(image, num_rows):
     table_height = table_bottom - table_top
     row_height = table_height / num_rows
     
-    final_top = table_top + int(row_height * 1.2)
-    final_bottom = table_bottom - int(row_height * 3.2)
+    final_top = table_top + int(row_height * 1.15)
+    final_bottom = table_bottom - int(row_height * 3.1)
 
     answer_x_start = bx + int(bw * 0.06)
     answer_x_end = bx + int(bw * 0.49)
