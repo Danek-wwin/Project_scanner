@@ -102,7 +102,7 @@ def find_blank_and_answers(image, num_rows):
     line_contours, _ = cv2.findContours(detected_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
     table_top = by + int(bh * 0.40)
-    table_bottom = by + int(bh * 0.1)
+    table_bottom = by + int(bh * 1.2)
 
     if line_contours:
         lines = [(cv2.boundingRect(lc)[1] + by + int(bh*0.15), cv2.boundingRect(lc)[0]) for lc in line_contours]
