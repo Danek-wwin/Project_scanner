@@ -78,11 +78,23 @@ def process_single_digit(cell_image):
         pred = output.argmax(dim=1).item()
         return str(pred)
 
-# ===== 3. АВТО-ПОИСК БЛАНКА =====
+# ===== 3. АВТО-ПОИСК БЛАНКА И ВЫПРЯМЛЕНИЕ =====
+def order_points(pts):
+    """Сортирует 4 угла листа: верхний-левый, верхний-правый, нижний-правый, нижний-левый"""
+    rect = np.zeros((4, 2), dtype="float32")
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+    return rect
+
 def find_blank_and_answers(image, num_rows):
     img = image.convert('L')
     arr = np.array(img)
     
+    # 1. Ищем контуры
     _, thresh = cv2.threshold(arr, 200, 255, cv2.THRESH_BINARY)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
@@ -90,19 +102,42 @@ def find_blank_and_answers(image, num_rows):
         return None
         
     c = max(contours, key=cv2.contourArea)
-    bx, by, bw, bh = cv2.boundingRect(c)
     
-    if bw < image.width * 0.3 or bh < image.height * 0.3:
-        return None
+    # 2. ВЫПРЯМЛЯЕМ ЛИСТ
+    peri = cv2.arcLength(c, True)
+    approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+    
+    warped = None
+    
+    if len(approx) == 4:
+        pts = order_points(approx.reshape(4, 2))
+        (tl, tr, br, bl) = pts
+        widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+        widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+        maxWidth = max(int(widthA), int(widthB))
+        heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+        heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+        maxHeight = max(int(heightA), int(heightB))
+        dst = np.array([[0, 0], [maxWidth - 1, 0], [maxWidth - 1, maxHeight - 1], [0, maxHeight - 1]], dtype="float32")
+        M = cv2.getPerspectiveTransform(pts, dst)
+        warped = cv2.warpPerspective(arr, M, (maxWidth, maxHeight), flags=cv2.INTER_CUBIC)
+        
+        arr = warped
+        bx, by, bw, bh = 0, 0, maxWidth, maxHeight
+    else:
+        bx, by, bw, bh = cv2.boundingRect(c)
+        if bw < image.width * 0.3 or bh < image.height * 0.3:
+            return None
 
+    # 3. ПОИСК ЛИНИЙ И ГРАНИЦ
     search_area = arr[by + int(bh*0.15) : by + int(bh*0.85), bx:bx+bw]
     _, thresh_lines = cv2.threshold(search_area, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (int(bw*0.4), 1))
     detected_lines = cv2.morphologyEx(thresh_lines, cv2.MORPH_OPEN, kernel, iterations=2)
     line_contours, _ = cv2.findContours(detected_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    table_top = by + int(bh)
-    table_bottom = by + int(bh * 0.8)
+    table_top = by + int(bh * 0.40)
+    table_bottom = by + int(bh * 0.85)
 
     if line_contours:
         lines = [(cv2.boundingRect(lc)[1] + by + int(bh*0.15), cv2.boundingRect(lc)[0]) for lc in line_contours]
@@ -120,11 +155,11 @@ def find_blank_and_answers(image, num_rows):
     table_height = table_bottom - table_top
     row_height = table_height / num_rows
     
-    final_top = table_top + int(row_height * 1.1)
-    final_bottom = table_bottom - int(row_height * 3.2)
+    final_top = table_top + int(row_height)
+    final_bottom = table_bottom - int(row_height * 3)
 
     answer_x_start = bx + int(bw * 0.06)
-    answer_x_end = bx + int(bw * 0.49)
+    answer_x_end = bx + int(bw * 0.5)
     
     return (bx, by, bw, bh), (answer_x_start, final_top, answer_x_end, final_bottom)
 
@@ -206,7 +241,31 @@ if image is not None:
                 bx, by, bw, bh = blank_box
                 ax1, ay1, ax2, ay2 = answer_box
                 
-                cropped_image = image.crop((ax1, ay1, ax2, ay2))
+                # --- ВАЖНО: Берем выпрямленное изображение для дальнейшей работы ---
+                img_gray = np.array(image.convert('L'))
+                _, thresh_vis = cv2.threshold(img_gray, 200, 255, cv2.THRESH_BINARY)
+                contours_vis, _ = cv2.findContours(thresh_vis, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                c_vis = max(contours_vis, key=cv2.contourArea)
+                peri_vis = cv2.arcLength(c_vis, True)
+                approx_vis = cv2.approxPolyDP(c_vis, 0.02 * peri_vis, True)
+                
+                if len(approx_vis) == 4:
+                    pts_vis = order_points(approx_vis.reshape(4, 2))
+                    (tl, tr, br, bl) = pts_vis
+                    widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
+                    widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
+                    maxWidth = max(int(widthA), int(widthB))
+                    heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
+                    heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
+                    maxHeight = max(int(heightA), int(heightB))
+                    dst_vis = np.array([[0, 0], [maxWidth - 1, 0], [maxWidth - 1, maxHeight - 1], [0, maxHeight - 1]], dtype="float32")
+                    M_vis = cv2.getPerspectiveTransform(pts_vis, dst_vis)
+                    warped_vis = cv2.warpPerspective(np.array(image), M_vis, (maxWidth, maxHeight), flags=cv2.INTER_CUBIC)
+                    image_for_crop = Image.fromarray(warped_vis)
+                else:
+                    image_for_crop = image
+                
+                cropped_image = image_for_crop.crop((ax1, ay1, ax2, ay2))
                 
                 w = ax2 - ax1
                 h = ay2 - ay1
@@ -215,7 +274,6 @@ if image is not None:
                 cell_width = w / num_cells
                 
                 results = []
-                # НОВОЕ: Список для хранения координат каждой клетки
                 all_cells_coords = []
                 
                 for r in range(num_rows):
@@ -227,7 +285,6 @@ if image is not None:
                         x_start = int(c * cell_width)
                         x_end = int((c + 1) * cell_width)
                         
-                        # НОВОЕ: Сохраняем координаты клетки (с учетом смещения области ax1, ay1)
                         all_cells_coords.append((ax1 + x_start, ay1 + y_start, ax1 + x_end, ay1 + y_end))
                         
                         cell = cropped_image.crop((x_start, y_start, x_end, y_end))
@@ -251,7 +308,6 @@ if image is not None:
                     for i, res in enumerate(results):
                         task_num = i + 2 
                         clean_res = res.replace("_", "")
-                        
                         etalon = st.session_state.get(f"input_{task_num}", "")
                         
                         if etalon != "":
@@ -274,16 +330,14 @@ if image is not None:
                         st.info(f"**Итого проверено:** {total_checked} | **Верно:** {correct_count} | **Ошибок:** {total_checked - correct_count}")
                 
                 with st.expander("🖼️ Показать, как программа нашла бланк"):
-                    draw_img = image.copy()
+                    # Для отрисовки используем выпрямленное изображение
+                    draw_img = image_for_crop.copy()
                     draw = ImageDraw.Draw(draw_img)
                     
-                    # Синяя рамка (весь бланк)
                     draw.rectangle([bx, by, bx+bw, by+bh], outline="blue", width=3)
-                    # Зеленая рамка (область ответов)
                     draw.rectangle([ax1, ay1, ax2, ay2], outline="green", width=3)
                     
-                    # НОВОЕ: Рисуем красные рамки вокруг каждой клетки
                     for (cx1, cy1, cx2, cy2) in all_cells_coords:
                         draw.rectangle([cx1, cy1, cx2, cy2], outline="red", width=1)
                     
-                    st.image(draw_img, caption="Синий — лист, Зеленый — область ответов, Красные — клетки для распознавания", use_container_width=True)
+                    st.image(draw_img, caption="Синий — выпрямленный лист, Зеленый — область, Красные — клетки", use_container_width=True)
